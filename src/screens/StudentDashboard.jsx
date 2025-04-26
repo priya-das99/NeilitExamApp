@@ -171,63 +171,77 @@ const StudentDashboard = () => {
   return (
     <ScrollView contentContainerStyle={styles.container}>
       {/* Header Section */}
-      <View style={styles.header}>
-        <Image
-          source={require('../../assets/images/createexam.png')}
-          style={styles.avatar}
-        />
-        <View style={styles.headerText}>
-          <Text style={styles.welcomeText}>Welcome back,</Text>
-          <Text style={styles.userName}>{user?.name || 'Student'}</Text>
+      <View style={styles.headerRow}>
+        <View style={styles.logoBrand}>
+          <Image
+            source={require('../../assets/images/exam.jpg')}
+            style={styles.logo}
+          />
+          <Text style={styles.brandName}>Exam Portal</Text>
         </View>
-      </View>
-
-      {/* Academic Summary */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Academic Summary</Text>
-        <View style={styles.summaryCards}>
-          <View style={[styles.summaryCard, { backgroundColor: '#e3f2fd' }]}>
-            <Text style={styles.summaryNumber}>3</Text>
-            <Text style={styles.summaryLabel}>Active Courses</Text>
-          </View>
-          <View style={[styles.summaryCard, { backgroundColor: '#f0f4c3' }]}>
-            <Text style={styles.summaryNumber}>82%</Text>
-            <Text style={styles.summaryLabel}>Average Score</Text>
-          </View>
-        </View>
-      </View>
-
-      {/* Course Progress */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Course Progress</Text>
-        {loadingCourses ? (
-          <ActivityIndicator size="small" color="#0066cc" />
-        ) : (
-          courses.map(renderCourseProgress)
-        )}
-      </View>
-
-      {/* Upcoming Exams */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Upcoming Exams</Text>
-        {upcomingExams.map(renderUpcomingExam)}
-      </View>
-
-      {/* Logout Button */}
-      <TouchableOpacity 
-        style={styles.logoutButton} 
-        onPress={handleLogoutClick}
-        disabled={loadingCourses}
-      >
-        {loadingCourses ? (
-          <ActivityIndicator color="#ffffff" />
-        ) : (
-          <>
+        <View style={styles.profileSection}>
+          <Text style={styles.studentName}>{user?.name || 'Student'}</Text>
+          <TouchableOpacity style={styles.logoutButton} onPress={handleLogoutClick} disabled={loadingCourses}>
             <Icon name="exit-to-app" size={20} color="#fff" />
             <Text style={styles.logoutButtonText}>Logout</Text>
-          </>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Dashboard Cards */}
+      <View style={styles.dashboardCardsRow}>
+        <View style={[styles.dashboardCard, { backgroundColor: '#e3f2fd' }]}> 
+          <Icon name="assignment" size={32} color="#1976d2" />
+          <Text style={styles.dashboardCardTitle}>Assigned Exams</Text>
+          <Text style={styles.dashboardCardValue}>{upcomingExams.length}</Text>
+        </View>
+        <View style={[styles.dashboardCard, { backgroundColor: '#f0f4c3' }]}> 
+          <Icon name="check-circle" size={32} color="#689f38" />
+          <Text style={styles.dashboardCardTitle}>Completed Exams</Text>
+          <Text style={styles.dashboardCardValue}>0</Text>
+        </View>
+        <View style={[styles.dashboardCard, { backgroundColor: '#ffe0b2' }]}> 
+          <Icon name="bar-chart" size={32} color="#f57c00" />
+          <Text style={styles.dashboardCardTitle}>Results</Text>
+          <Text style={styles.dashboardCardValue}>0</Text>
+        </View>
+      </View>
+
+      {/* Assigned Exams Section */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Assigned Exams</Text>
+        {upcomingExams.length === 0 ? (
+          <Text style={styles.emptyText}>No assigned exams.</Text>
+        ) : (
+          upcomingExams.map((exam, idx) => (
+            <View key={exam.id} style={styles.examCardRow}>
+              <View style={styles.examInfo}>
+                <Text style={styles.examTitle}>{exam.course}</Text>
+                <Text style={styles.examMeta}>{exam.date} | {exam.duration}</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.startExamButton}
+                onPress={() => navigation.navigate('ExamAttemptScreen')}
+              >
+                <Icon name="play-arrow" size={20} color="#fff" />
+                <Text style={styles.startExamButtonText}>Start Exam</Text>
+              </TouchableOpacity>
+            </View>
+          ))
         )}
-      </TouchableOpacity>
+      </View>
+
+      {/* Completed Exams Section */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Completed Exams</Text>
+        <Text style={styles.emptyText}>No completed exams yet.</Text>
+      </View>
+
+      {/* Results/Reports Section */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Results / Reports</Text>
+        <Text style={styles.emptyText}>No results available yet.</Text>
+      </View>
     </ScrollView>
   );
 };
@@ -244,26 +258,69 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#fff',
   },
-  header: {
+  headerRow: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 30,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2,
   },
-  avatar: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    marginRight: 15,
+  logoBrand: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
-  headerText: {
-    flex: 1,
+  logo: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    marginRight: 10,
   },
-  welcomeText: {
+  brandName: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#1976d2',
+  },
+  profileSection: {
+    alignItems: 'flex-end',
+  },
+  studentName: {
     fontSize: 16,
-    color: '#666',
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 6,
   },
-  userName: {
-    fontSize: 24,
+  dashboardCardsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 25,
+  },
+  dashboardCard: {
+    flex: 1,
+    marginHorizontal: 5,
+    borderRadius: 12,
+    alignItems: 'center',
+    padding: 18,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  dashboardCardTitle: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 8,
+    marginBottom: 2,
+  },
+  dashboardCardValue: {
+    fontSize: 22,
     fontWeight: 'bold',
     color: '#333',
   },
@@ -275,27 +332,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#333',
     marginBottom: 15,
-  },
-  summaryCards: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 15,
-  },
-  summaryCard: {
-    width: '48%',
-    padding: 15,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  summaryNumber: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  summaryLabel: {
-    fontSize: 14,
-    color: '#666',
-    marginTop: 5,
   },
   courseCard: {
     backgroundColor: '#fff',
@@ -377,6 +413,53 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  examCardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    padding: 15,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  examInfo: {
+    flex: 1,
+  },
+  examTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1976d2',
+  },
+  examMeta: {
+    fontSize: 13,
+    color: '#888',
+    marginTop: 2,
+  },
+  startExamButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1976d2',
+    borderRadius: 6,
+    paddingVertical: 7,
+    paddingHorizontal: 14,
+    marginLeft: 10,
+  },
+  startExamButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 14,
+    marginLeft: 5,
+  },
+  emptyText: {
+    color: '#aaa',
+    fontSize: 15,
+    textAlign: 'center',
+    marginVertical: 10,
   },
 });
 

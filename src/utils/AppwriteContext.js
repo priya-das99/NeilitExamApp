@@ -1,6 +1,6 @@
 import React, { createContext, useState, useEffect, useContext } from 'react';
 import { AuthService } from './authService';
-import { client, account, databases } from './appwriteConfig';
+import { client, account, databases, appwriteConfig } from './appwriteConfig';
 
 // Create and export the context explicitly
 export const AppwriteContext = createContext({
@@ -104,7 +104,12 @@ export const AppwriteProvider = ({ children }) => {
                 console.error('Role verification failed:', error);
                 return false;
             }
-        }
+        },
+        databases,
+        account,
+        client,
+        databaseId: appwriteConfig.databaseId,
+        studentsCollectionId: appwriteConfig.studentsCollectionId,
     };
 
     return (

@@ -1,13 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
 import { AuthService } from '../utils/authService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useAppwrite } from '../utils/AppwriteContext';
+import Icon from 'react-native-vector-icons/MaterialIcons';
+import { Picker } from '@react-native-picker/picker';
 
 // Constants for throttling
 const REGISTRATION_THROTTLE_KEY = 'lastRegistrationAttempt';
 const THROTTLE_DURATION = 30 * 1000; // 30 seconds
 
 const CandidateSignupScreen = ({ navigation }) => {
+  const { databases, databaseId } = useAppwrite();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -16,6 +20,14 @@ const CandidateSignupScreen = ({ navigation }) => {
   const [errorMessage, setErrorMessage] = useState('');
   const [isThrottled, setIsThrottled] = useState(false);
   const [retryTimer, setRetryTimer] = useState(0);
+  const [courses, setCourses] = useState([]);
+  const [selectedCourse, setSelectedCourse] = useState(null);
+  const [loadingCourses, setLoadingCourses] = useState(true);
+
+  // Fetch courses on component mount
+  useEffect(() => {
+    fetchCourses();
+  }, []);
 
   // Check if registration is throttled on component mount
   useEffect(() => {
@@ -41,6 +53,22 @@ const CandidateSignupScreen = ({ navigation }) => {
       if (interval) clearInterval(interval);
     };
   }, [isThrottled, retryTimer]);
+
+  // Fetch courses from database
+  const fetchCourses = async () => {
+    try {
+      const response = await databases.listDocuments(
+        databaseId,
+        '680d05a00009a4884d60'
+      );
+      setCourses(response.documents);
+    } catch (error) {
+      console.error('Error fetching courses:', error);
+      Alert.alert('Error', 'Failed to load courses. Please try again.');
+    } finally {
+      setLoadingCourses(false);
+    }
+  };
 
   // Check if user is throttled
   const checkThrottleStatus = async () => {
@@ -76,7 +104,7 @@ const CandidateSignupScreen = ({ navigation }) => {
 
   // Validate the form inputs
   const validateForm = () => {
-    if (!name || !email || !password || !confirmPassword) {
+    if (!name || !email || !password || !confirmPassword || !selectedCourse) {
       setErrorMessage('All fields are required.');
       return false;
     }
@@ -114,7 +142,7 @@ const CandidateSignupScreen = ({ navigation }) => {
 
     try {
       // Register the user using the AuthService.registerUser method
-      const user = await AuthService.registerUser(email, password, name);
+      const user = await AuthService.registerUser(email, password, name, selectedCourse);
 
       // Show success message and navigate to login
       Alert.alert(
@@ -149,7 +177,7 @@ const CandidateSignupScreen = ({ navigation }) => {
   };
 
   return (
-    <View style={styles.container}>
+    <ScrollView style={styles.container}>
       <Text style={styles.title}>Candidate Signup</Text>
 
       {errorMessage ? (
@@ -195,6 +223,31 @@ const CandidateSignupScreen = ({ navigation }) => {
         editable={!isThrottled}
       />
 
+      {/* Course Selection */}
+      <View style={styles.pickerContainer}>
+        <Text style={styles.courseLabel}>Select Course</Text>
+        {loadingCourses ? (
+          <Text style={styles.loadingText}>Loading courses...</Text>
+        ) : courses.length === 0 ? (
+          <Text style={styles.errorText}>No courses available.</Text>
+        ) : (
+          <Picker
+            selectedValue={selectedCourse?.$id}
+            onValueChange={(itemValue, itemIndex) => {
+              const course = courses.find(c => c.$id === itemValue);
+              setSelectedCourse(course);
+            }}
+            enabled={!loadingCourses && !isThrottled}
+            style={styles.picker}
+          >
+            <Picker.Item label="Select a course..." value={null} />
+            {courses.map(course => (
+              <Picker.Item key={course.$id} label={course.name} value={course.$id} />
+            ))}
+          </Picker>
+        )}
+      </View>
+
       <TouchableOpacity
         style={[
           styles.button,
@@ -214,14 +267,13 @@ const CandidateSignupScreen = ({ navigation }) => {
       >
         <Text style={styles.loginText}>Already have an account? Login</Text>
       </TouchableOpacity>
-    </View>
+    </ScrollView>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    justifyContent: 'center',
     padding: 20,
     backgroundColor: '#fff',
   },
@@ -251,6 +303,9 @@ const styles = StyleSheet.create({
     marginBottom: 15,
     fontSize: 16,
   },
+  pickerContainer: {
+    marginBottom: 20,
+  },
   button: {
     backgroundColor: '#007bff',
     padding: 15,
@@ -273,6 +328,26 @@ const styles = StyleSheet.create({
     color: '#007bff',
     textAlign: 'center',
     fontSize: 16,
+  },
+  picker: {
+    height: 50,
+    borderColor: '#ccc',
+    borderWidth: 1,
+    borderRadius: 5,
+    marginBottom: 10,
+    color: '#333',
+    backgroundColor: '#f9f9f9',
+  },
+  courseLabel: {
+    fontSize: 16,
+    color: '#666',
+    marginBottom: 10,
+  },
+  loadingText: {
+    color: '#888',
+    fontSize: 14,
+    marginBottom: 10,
+    textAlign: 'center',
   },
 });
 

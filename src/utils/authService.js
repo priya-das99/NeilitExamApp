@@ -56,9 +56,9 @@ const SessionService = {
 
 export const AuthService = {
   // User registration with pending status
-  async registerUser(email, password, name) {
+  async registerUser(email, password, name, selectedCourse) {
     try {
-      if (!email || !password || !name) {
+      if (!email || !password || !name || !selectedCourse) {
         throw new Error('All fields are required');
       }
 
@@ -77,6 +77,8 @@ export const AuthService = {
           email,
           student_id: userId,
           status: 'pending', // Default status
+          courseId: selectedCourse.$id,
+          
           createdAt: new Date().toISOString() // Include `created_at`
         },
         [
@@ -90,7 +92,11 @@ export const AuthService = {
         id: userId,
         email,
         name,
-        status: 'pending'
+        status: 'pending',
+        course: {
+          id: selectedCourse.$id,
+          name: selectedCourse.name
+        }
       };
     } catch (error) {
       console.error('Registration Error:', error);
