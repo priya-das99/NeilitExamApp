@@ -1,137 +1,249 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
-  TouchableOpacity,
-  StyleSheet,
   FlatList,
-  Alert,
+  StyleSheet,
+  ActivityIndicator,
+  TouchableOpacity,
   StatusBar,
   SafeAreaView,
+  Alert,
+  Modal,
+  TextInput,
+  ScrollView,
+  RefreshControl,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
+import { databases, appwriteConfig, ID } from '../utils/appwriteConfig';
 import AdminSidebar from '../components/AdminSidebar';
-
-// Mock data for students
-const mockStudents = [
-  {
-    id: '1',
-    name: 'John Doe',
-    email: 'john@example.com',
-    phone: '1234567890',
-    rollNumber: '2023001',
-    status: 'Active',
-  },
-  {
-    id: '2',
-    name: 'Jane Smith',
-    email: 'jane@example.com',
-    phone: '9876543210',
-    rollNumber: '2023002',
-    status: 'Active',
-  },
-  {
-    id: '3',
-    name: 'Mike Johnson',
-    email: 'mike@example.com',
-    phone: '4567891230',
-    rollNumber: '2023003',
-    status: 'Inactive',
-  },
-];
+import { Picker } from '@react-native-picker/picker';
+import { account } from '../utils/appwriteConfig';
+import { Query } from 'appwrite';
 
 const ManageStudents = () => {
+  const [students, setStudents] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [students, setStudents] = useState(mockStudents);
+  const [refreshing, setRefreshing] = useState(false);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [courses, setCourses] = useState([]);
+  const [loadingCourses, setLoadingCourses] = useState(true);
+  const [newStudent, setNewStudent] = useState({
+    name: '',
+    email: '',
+    courseId: '',
+    status: 'active',
+    password: '',
+  });
 
-  const handleEditStudent = (studentId) => {
-    // TODO: Implement edit functionality
-    Alert.alert('Edit Student', `Editing student with ID: ${studentId}`);
+  const fetchStudents = async () => {
+    try {
+      setLoading(true);
+      const res = await databases.listDocuments(
+        appwriteConfig.databaseId,
+        appwriteConfig.studentsCollectionId,
+        [
+          Query.orderDesc('createdAt')
+        ]
+      );
+      console.log('Fetched students:', res.documents);
+      setStudents(res.documents);
+    } catch (err) {
+      console.error('Failed to fetch students:', err);
+      Alert.alert('Error', 'Failed to load students. Please try again.');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   };
 
-  const handleDeleteStudent = (studentId) => {
+  useEffect(() => {
+    fetchStudents();
+  }, []);
+
+  useEffect(() => {
+    fetchCourses();
+  }, []);
+
+  const fetchCourses = async () => {
+    try {
+      setLoadingCourses(true);
+      const response = await databases.listDocuments(
+        appwriteConfig.databaseId,
+        appwriteConfig.coursesCollectionId
+      );
+      setCourses(response.documents);
+    } catch (error) {
+      console.error('Error fetching courses:', error);
+      Alert.alert('Error', 'Failed to load courses. Please try again.');
+    } finally {
+      setLoadingCourses(false);
+    }
+  };
+
+  const onRefresh = React.useCallback(() => {
+    setRefreshing(true);
+    fetchStudents();
+  }, []);
+
+  const handleStatusChange = async (studentId, currentStatus) => {
+    try {
+      const newStatus = currentStatus === 'active' ? 'inactive' : 'active';
+      await databases.updateDocument(
+        appwriteConfig.databaseId,
+        appwriteConfig.studentsCollectionId,
+        studentId,
+        { status: newStatus }
+      );
+      setStudents(prevStudents =>
+        prevStudents.map(student =>
+          student.studentId === studentId
+            ? { ...student, status: newStatus }
+            : student
+        )
+      );
+      Alert.alert('Success', `Student status updated to ${newStatus}`);
+    } catch (err) {
+      console.error('Failed to update status:', err);
+      Alert.alert('Error', 'Failed to update student status');
+    }
+  };
+
+  const handleDeleteStudent = async (studentId) => {
     Alert.alert(
       'Delete Student',
       'Are you sure you want to delete this student?',
       [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
+        { text: 'Cancel', style: 'cancel' },
         {
           text: 'Delete',
-          onPress: () => {
-            setStudents(prevStudents => prevStudents.filter(student => student.id !== studentId));
-            Alert.alert('Success', 'Student deleted successfully');
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await databases.deleteDocument(
+                appwriteConfig.databaseId,
+                appwriteConfig.studentsCollectionId,
+                studentId
+              );
+              
+              // Instead of just updating local state, refresh the entire list
+              fetchStudents();
+              
+              Alert.alert('Success', 'Student deleted successfully');
+            } catch (err) {
+              console.error('Failed to delete student:', err);
+              if (err.message.includes('not found')) {
+                Alert.alert('Error', 'Student not found in the database');
+                // Refresh the list if we get a not found error
+                fetchStudents();
+              } else {
+                Alert.alert('Error', 'Failed to delete student. Please try again.');
+              }
+            }
           },
         },
-      ],
+      ]
     );
   };
 
-  const handleToggleStatus = (studentId) => {
-    setStudents(prevStudents =>
-      prevStudents.map(student =>
-        student.id === studentId
-          ? { ...student, status: student.status === 'Active' ? 'Inactive' : 'Active' }
-          : student
-      )
-    );
+  const handleAddStudent = async () => {
+    if (!newStudent.name || !newStudent.email || !newStudent.courseId || !newStudent.password) {
+      Alert.alert('Error', 'Please fill in all required fields');
+      return;
+    }
+
+    try {
+      const studentId = ID.unique();
+      
+      // Create the student account first
+      await account.create(studentId, newStudent.email, newStudent.password, newStudent.name);
+      
+      // Then create the student document without the password
+      const { password, ...studentData } = newStudent;
+      await databases.createDocument(
+        appwriteConfig.databaseId,
+        appwriteConfig.studentsCollectionId,
+        studentId,
+        {
+          ...studentData,
+          studentId,
+          createdAt: new Date().toISOString(),
+          status: 'active'
+        }
+      );
+      
+      setShowAddModal(false);
+      setNewStudent({
+        name: '',
+        email: '',
+        courseId: '',
+        status: 'active',
+        password: '',
+      });
+      fetchStudents();
+      Alert.alert('Success', 'Student added successfully');
+    } catch (err) {
+      console.error('Failed to add student:', err);
+      Alert.alert('Error', 'Failed to add student');
+    }
   };
 
-  const renderStudentItem = ({ item }) => (
+  const renderStudentCard = ({ item }) => (
     <View style={styles.studentCard}>
-      <View style={styles.studentHeader}>
-        <Text style={styles.studentName}>{item.name}</Text>
+      <View style={styles.cardHeader}>
+        <Text style={styles.name}>{item.name}</Text>
         <View style={[
           styles.statusBadge,
-          { backgroundColor: item.status === 'Active' ? '#4CAF50' : '#FF9800' }
+          { backgroundColor: item.status === 'active' ? '#4CAF50' : item.status === 'pending' ? '#FFC107' : '#F44336' }
         ]}>
           <Text style={styles.statusText}>{item.status}</Text>
         </View>
       </View>
-
-      <View style={styles.studentDetails}>
-        <View style={styles.detailItem}>
+      <View style={styles.cardBody}>
+        <View style={styles.infoRow}>
           <Icon name="email" size={16} color="#666" />
-          <Text style={styles.detailText}>{item.email}</Text>
+          <Text style={styles.infoText}>{item.email}</Text>
         </View>
-        <View style={styles.detailItem}>
-          <Icon name="phone" size={16} color="#666" />
-          <Text style={styles.detailText}>{item.phone}</Text>
+        <View style={styles.infoRow}>
+          <Icon name="school" size={16} color="#666" />
+          <Text style={styles.infoText}>Course ID: {item.courseId}</Text>
         </View>
-        <View style={styles.detailItem}>
-          <Icon name="badge" size={16} color="#666" />
-          <Text style={styles.detailText}>Roll No: {item.rollNumber}</Text>
+        <View style={styles.infoRow}>
+          <Icon name="calendar-today" size={16} color="#666" />
+          <Text style={styles.infoText}>
+            Joined: {new Date(item.createdAt).toLocaleDateString()}
+          </Text>
         </View>
       </View>
-
       <View style={styles.actionButtons}>
         <TouchableOpacity
-          style={[styles.actionButton, styles.editButton]}
-          onPress={() => handleEditStudent(item.id)}
-        >
-          <Icon name="edit" size={20} color="#fff" />
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.actionButton, styles.toggleButton]}
-          onPress={() => handleToggleStatus(item.id)}
+          style={[styles.actionButton, styles.statusButton]}
+          onPress={() => handleStatusChange(item.studentId, item.status)}
         >
           <Icon
-            name={item.status === 'Active' ? 'pause' : 'play-arrow'}
+            name={item.status === 'active' ? 'pause' : 'play-arrow'}
             size={20}
             color="#fff"
           />
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.actionButton, styles.deleteButton]}
-          onPress={() => handleDeleteStudent(item.id)}
+          onPress={() => handleDeleteStudent(item.studentId)}
         >
           <Icon name="delete" size={20} color="#fff" />
         </TouchableOpacity>
       </View>
     </View>
   );
+
+  if (loading) {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" color="#00e4d0" />
+      </View>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -144,16 +256,126 @@ const ManageStudents = () => {
             <Icon name="menu" size={24} color="#333" />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Manage Students</Text>
-          <View style={{ width: 24 }} />
+          <TouchableOpacity
+            style={styles.addButton}
+            onPress={() => setShowAddModal(true)}
+          >
+            <Icon name="add" size={24} color="#fff" />
+          </TouchableOpacity>
         </View>
 
-        <FlatList
-          data={students}
-          renderItem={renderStudentItem}
-          keyExtractor={item => item.id}
-          contentContainerStyle={styles.listContainer}
-          showsVerticalScrollIndicator={false}
-        />
+        {loading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#00e4d0" />
+          </View>
+        ) : (
+          <FlatList
+            data={students}
+            keyExtractor={item => item.studentId}
+            renderItem={renderStudentCard}
+            contentContainerStyle={styles.listContainer}
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                colors={['#00e4d0']}
+                tintColor="#00e4d0"
+              />
+            }
+            ListEmptyComponent={
+              <View style={styles.emptyContainer}>
+                <Icon name="people" size={50} color="#ccc" />
+                <Text style={styles.emptyText}>No students found</Text>
+              </View>
+            }
+          />
+        )}
+
+        <Modal
+          visible={showAddModal}
+          animationType="slide"
+          transparent={true}
+          onRequestClose={() => setShowAddModal(false)}
+        >
+          <View style={styles.modalContainer}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Add New Student</Text>
+                <TouchableOpacity onPress={() => setShowAddModal(false)}>
+                  <Icon name="close" size={24} color="#333" />
+                </TouchableOpacity>
+              </View>
+              <ScrollView style={styles.modalBody}>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>Name *</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={newStudent.name}
+                    onChangeText={text => setNewStudent(prev => ({ ...prev, name: text }))}
+                    placeholder="Enter student name"
+                  />
+                </View>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>Email *</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={newStudent.email}
+                    onChangeText={text => setNewStudent(prev => ({ ...prev, email: text }))}
+                    placeholder="Enter student email"
+                    keyboardType="email-address"
+                  />
+                </View>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>Password *</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={newStudent.password}
+                    onChangeText={text => setNewStudent(prev => ({ ...prev, password: text }))}
+                    placeholder="Enter password"
+                    secureTextEntry
+                  />
+                </View>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>Course *</Text>
+                  {loadingCourses ? (
+                    <Text style={styles.loadingText}>Loading courses...</Text>
+                  ) : courses.length === 0 ? (
+                    <Text style={styles.errorText}>No courses available.</Text>
+                  ) : (
+                    <View style={{ borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 8 }}>
+                      <Picker
+                        selectedValue={newStudent.courseId}
+                        onValueChange={(itemValue) => setNewStudent(prev => ({ ...prev, courseId: itemValue }))}
+                        style={{ height: 50 }}
+                      >
+                        <Picker.Item label="Select a course..." value="" />
+                        {courses.map(course => (
+                          <Picker.Item key={course.$id} label={course.name} value={course.$id} />
+                        ))}
+                      </Picker>
+                    </View>
+                  )}
+                </View>
+              </ScrollView>
+              <View style={styles.modalFooter}>
+                <TouchableOpacity
+                  style={styles.cancelButton}
+                  onPress={() => setShowAddModal(false)}
+                >
+                  <Text style={styles.cancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.saveButton}
+                  onPress={handleAddStudent}
+                >
+                  <Text style={styles.saveButtonText}>Add Student</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </View>
     </SafeAreaView>
   );
@@ -181,62 +403,66 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#333',
   },
+  addButton: {
+    backgroundColor: '#00e4d0',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   listContainer: {
-    padding: 20,
+    padding: 16,
   },
   studentCard: {
     backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 15,
-    marginBottom: 15,
+    borderRadius: 8,
+    padding: 16,
+    marginBottom: 12,
     elevation: 2,
     shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 1,
-    },
-    shadowOpacity: 0.2,
-    shadowRadius: 1.41,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
   },
-  studentHeader: {
+  cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 10,
+    marginBottom: 12,
   },
-  studentName: {
+  name: {
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: 'bold',
     color: '#333',
-    flex: 1,
   },
   statusBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 15,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
   },
   statusText: {
     color: '#fff',
     fontSize: 12,
-    fontWeight: '500',
+    fontWeight: 'bold',
   },
-  studentDetails: {
-    gap: 10,
-    marginBottom: 15,
+  cardBody: {
+    gap: 8,
   },
-  detailItem: {
+  infoRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
+    gap: 8,
   },
-  detailText: {
-    fontSize: 14,
+  infoText: {
     color: '#666',
+    fontSize: 14,
   },
   actionButtons: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    gap: 10,
+    gap: 8,
+    marginTop: 12,
   },
   actionButton: {
     width: 40,
@@ -245,14 +471,113 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  editButton: {
-    backgroundColor: '#2196F3',
-  },
-  toggleButton: {
+  statusButton: {
     backgroundColor: '#FF9800',
   },
   deleteButton: {
-    backgroundColor: '#FF3B30',
+    backgroundColor: '#F44336',
+  },
+  centered: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  emptyText: {
+    fontSize: 16,
+    color: '#666',
+    marginTop: 10,
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    width: '90%',
+    maxHeight: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  modalBody: {
+    padding: 16,
+  },
+  modalFooter: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+    gap: 8,
+  },
+  inputGroup: {
+    marginBottom: 16,
+  },
+  label: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 4,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    borderRadius: 4,
+    padding: 8,
+    fontSize: 16,
+  },
+  cancelButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 4,
+    backgroundColor: '#e0e0e0',
+  },
+  cancelButtonText: {
+    color: '#666',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  saveButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 4,
+    backgroundColor: '#00e4d0',
+  },
+  saveButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  loadingText: {
+    color: '#666',
+    fontSize: 14,
+  },
+  errorText: {
+    color: '#F44336',
+    fontSize: 14,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 });
 

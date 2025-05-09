@@ -75,7 +75,7 @@ export const AuthService = {
         {
           name,
           email,
-          student_id: userId,
+          studentId: userId,
           status: 'pending', // Default status
           courseId: selectedCourse.$id,
           

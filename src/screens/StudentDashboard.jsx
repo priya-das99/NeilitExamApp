@@ -1,9 +1,11 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Alert, ScrollView, ActivityIndicator, Image } from 'react-native';
+import React, { useEffect, useState, useCallback } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Alert, ScrollView, ActivityIndicator, Image, RefreshControl } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useAppwrite } from '../utils/AppwriteContext';
 import { useAuthNavigation } from '../hooks/useAuthNavigation';
 import { useNavigation } from '@react-navigation/native';
+import { databases, appwriteConfig } from '../utils/appwriteConfig';
+import { Query } from 'appwrite';
 
 const StudentDashboard = () => {
   const { user, isLoading, handleLogout } = useAppwrite();
@@ -12,12 +14,176 @@ const StudentDashboard = () => {
   const [courses, setCourses] = useState([]);
   const [loadingCourses, setLoadingCourses] = useState(true);
   const [upcomingExams, setUpcomingExams] = useState([]);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const fetchData = async () => {
+    try {
+      setLoadingCourses(true);
+      console.log('Starting data fetch for student:', user.$id);
+      console.log('Database ID:', appwriteConfig.databaseId);
+      console.log('Students Collection ID:', appwriteConfig.studentsCollectionId);
+
+      // First get the student's courseId
+      try {
+        const studentRes = await databases.getDocument(
+          appwriteConfig.databaseId,
+          appwriteConfig.studentsCollectionId,
+          user.$id
+        );
+        console.log('Student data fetched successfully:', studentRes);
+        console.log('Student courseId:', studentRes.courseId);
+
+        if (!studentRes.courseId) {
+          console.error('Student has no course assigned');
+          Alert.alert('Error', 'You are not assigned to any course. Please contact administrator.');
+          return;
+        }
+
+        // Fetch student's course
+        try {
+          const courseRes = await databases.getDocument(
+            appwriteConfig.databaseId,
+            appwriteConfig.coursesCollectionId,
+            studentRes.courseId
+          );
+          console.log('Course data fetched successfully:', courseRes);
+          setCourses([courseRes]);
+
+          // Fetch upcoming exam assignments
+          try {
+            console.log('Fetching exam assignments for student:', user.$id);
+            console.log('Exam Assignments Collection ID:', appwriteConfig.examAssignmentsCollectionId);
+            
+            // First, let's check if there are any assignments without status filter
+            const allAssignmentsRes = await databases.listDocuments(
+              appwriteConfig.databaseId,
+              appwriteConfig.examAssignmentsCollectionId,
+              [Query.equal('studentId', user.$id)]
+            );
+            console.log('All assignments found:', allAssignmentsRes.documents.length);
+            console.log('All assignments data:', allAssignmentsRes.documents);
+
+            // Now fetch pending assignments
+            const assignmentsRes = await databases.listDocuments(
+              appwriteConfig.databaseId,
+              appwriteConfig.examAssignmentsCollectionId,
+              [
+                Query.equal('studentId', user.$id),
+                Query.equal('status', 'pending')
+              ]
+            );
+            console.log('Pending assignments found:', assignmentsRes.documents.length);
+            console.log('Pending assignments data:', assignmentsRes.documents);
+
+            // Fetch exam details for each assignment with error handling
+            const examDetailsPromises = assignmentsRes.documents.map(async (assignment) => {
+              try {
+                console.log('Fetching exam details for assignment:', assignment.examId);
+                console.log('Assignment data:', assignment);
+                
+                const examRes = await databases.getDocument(
+                  appwriteConfig.databaseId,
+                  appwriteConfig.examsCollectionId,
+                  assignment.examId
+                );
+                console.log('Exam details fetched successfully:', examRes);
+
+                // Validate exam data
+                if (!examRes || !examRes.title || !examRes.duration || !examRes.startTime) {
+                  console.error('Invalid exam data:', examRes);
+                  return {
+                    ...assignment,
+                    examDetails: null,
+                    error: 'Invalid exam data'
+                  };
+                }
+
+                // Check if exam is scheduled for future
+                const examStartTime = new Date(examRes.startTime);
+                const now = new Date();
+                if (examStartTime < now) {
+                  console.log('Exam has already started:', examRes.title);
+                  return {
+                    ...assignment,
+                    examDetails: null,
+                    error: 'Exam has already started'
+                  };
+                }
+
+                return {
+                  ...assignment,
+                  examDetails: examRes
+                };
+              } catch (err) {
+                console.error('Failed to fetch exam details for assignment:', assignment.examId, err);
+                console.error('Assignment data:', assignment);
+                return {
+                  ...assignment,
+                  examDetails: null,
+                  error: 'Exam not found'
+                };
+              }
+            });
+
+            const examDetails = await Promise.all(examDetailsPromises);
+            
+            // Filter out invalid exams and sort by start time
+            const validExams = examDetails
+              .filter(exam => exam.examDetails !== null)
+              .sort((a, b) => {
+                const timeA = new Date(a.examDetails.startTime).getTime();
+                const timeB = new Date(b.examDetails.startTime).getTime();
+                return timeA - timeB;
+              });
+            
+            const invalidExams = examDetails.filter(exam => exam.examDetails === null);
+            
+            if (invalidExams.length > 0) {
+              console.warn('Some exams could not be loaded:', invalidExams.length);
+              // Update assignment status for invalid exams
+              for (const invalidExam of invalidExams) {
+                try {
+                  await databases.updateDocument(
+                    appwriteConfig.databaseId,
+                    appwriteConfig.examAssignmentsCollectionId,
+                    invalidExam.$id,
+                    {
+                      status: 'error'
+                    }
+                  );
+                } catch (updateErr) {
+                  console.error('Failed to update assignment status:', updateErr);
+                }
+              }
+            }
+            
+            console.log('Valid exams found:', validExams.length);
+            setUpcomingExams(validExams);
+          } catch (assignmentsErr) {
+            console.error('Failed to fetch assignments:', assignmentsErr);
+            throw assignmentsErr;
+          }
+        } catch (courseErr) {
+          console.error('Failed to fetch course:', courseErr);
+          throw courseErr;
+        }
+      } catch (studentErr) {
+        console.error('Failed to fetch student data:', studentErr);
+        throw studentErr;
+      }
+    } catch (err) {
+      console.error('Failed to fetch data:', err);
+      Alert.alert('Error', 'Failed to load data. Please try again.');
+    } finally {
+      setLoadingCourses(false);
+      setRefreshing(false);
+    }
+  };
 
   useEffect(() => {
     const checkAuth = async () => {
       try {
         if (!user) {
-          // If no user is found, redirect to login
           navigation.reset({
             index: 0,
             routes: [{ name: 'CandidateLogin' }],
@@ -26,7 +192,6 @@ const StudentDashboard = () => {
         }
 
         if (user.preferences?.role !== 'student') {
-          // If user is not a student, show error and logout
           Alert.alert(
             'Access Denied',
             'You do not have permission to access this dashboard.',
@@ -46,81 +211,31 @@ const StudentDashboard = () => {
           return;
         }
 
-        // If everything is valid, set authenticated state
         setIsAuthenticated(true);
+        fetchData();
       } catch (error) {
         console.error('Auth check error:', error);
-        Alert.alert(
-          'Error',
-          'An error occurred while checking authentication.',
-          [
-            {
-              text: 'OK',
-              onPress: async () => {
-                await handleLogout();
-                navigation.reset({
-                  index: 0,
-                  routes: [{ name: 'CandidateLogin' }],
-                });
-              },
-            },
-          ]
-        );
+        navigation.navigate('CandidateLogin');
       }
     };
 
     checkAuth();
-  }, [user, navigation, handleLogout]);
+  }, [user]);
 
-  useEffect(() => {
-    loadStudentData();
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    fetchData();
   }, []);
-
-  const loadStudentData = async () => {
-    try {
-      // Simulated API calls - replace with actual data fetching
-      const mockCourses = [
-        { id: 1, name: 'Mathematics', progress: 65 },
-        { id: 2, name: 'Physics', progress: 45 },
-        { id: 3, name: 'Chemistry', progress: 30 },
-      ];
-      
-      const mockExams = [
-        { id: 1, course: 'Mathematics', date: '2024-03-15', duration: '2 Hours' },
-        { id: 2, course: 'Physics', date: '2024-03-20', duration: '1.5 Hours' },
-      ];
-
-      setCourses(mockCourses);
-      setUpcomingExams(mockExams);
-    } catch (error) {
-      Alert.alert('Error', 'Failed to load student data');
-    } finally {
-      setLoadingCourses(false);
-    }
-  };
 
   const handleLogoutClick = async () => {
     try {
-      // Show loading state
-      setLoadingCourses(true);
-      
-      // Call handleLogout from Appwrite context
       await handleLogout();
-      
-      // Reset navigation to login screen
       navigation.reset({
         index: 0,
-        routes: [{ name: 'CandidateLogin' }],
+        routes: [{ name: 'Welcome' }],
       });
     } catch (error) {
       console.error('Logout error:', error);
-      Alert.alert(
-        'Logout Failed',
-        'Unable to logout. Please try again.',
-        [{ text: 'OK' }]
-      );
-    } finally {
-      setLoadingCourses(false);
     }
   };
 
@@ -142,25 +257,44 @@ const StudentDashboard = () => {
   );
 
   const renderUpcomingExam = (exam) => (
-    <View key={exam.id} style={styles.examCard}>
-      <Icon name="assignment" size={24} color="#666" />
-      <View style={styles.examDetails}>
-        <Text style={styles.examCourse}>{exam.course}</Text>
-        <Text style={styles.examDate}>{exam.date}</Text>
+    <View key={exam.$id} style={styles.examCardRow}>
+      <View style={styles.examInfo}>
+        <Text style={styles.examTitle}>
+          {exam.examDetails?.title || 'Exam Details Unavailable'}
+        </Text>
+        <Text style={styles.examMeta}>
+          {exam.examDetails ? (
+            `${new Date(exam.examDetails?.startTime).toLocaleDateString()} | 
+            Duration: ${exam.examDetails?.duration} minutes`
+          ) : (
+            'Exam details not available'
+          )}
+        </Text>
       </View>
-      <Text style={styles.examDuration}>{exam.duration}</Text>
+      {exam.examDetails ? (
+        <TouchableOpacity
+          style={styles.startExamButton}
+          onPress={() => navigation.navigate('ExamAttemptScreen', { 
+            examId: exam.examId,
+            assignmentId: exam.$id
+          })}
+        >
+          <Icon name="play-arrow" size={20} color="#fff" />
+          <Text style={styles.startExamButtonText}>Start Exam</Text>
+        </TouchableOpacity>
+      ) : (
+        <TouchableOpacity
+          style={[styles.startExamButton, { backgroundColor: '#ccc' }]}
+          disabled={true}
+        >
+          <Icon name="error" size={20} color="#fff" />
+          <Text style={styles.startExamButtonText}>Unavailable</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 
-  if (isLoading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#0000ff" />
-      </View>
-    );
-  }
-
-  if (!isAuthenticated) {
+  if (isLoading || !isAuthenticated) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#0000ff" />
@@ -169,7 +303,17 @@ const StudentDashboard = () => {
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <ScrollView 
+      contentContainerStyle={styles.container}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          colors={['#00e4d0']}
+          tintColor="#00e4d0"
+        />
+      }
+    >
       {/* Header Section */}
       <View style={styles.headerRow}>
         <View style={styles.logoBrand}>
@@ -213,21 +357,9 @@ const StudentDashboard = () => {
         {upcomingExams.length === 0 ? (
           <Text style={styles.emptyText}>No assigned exams.</Text>
         ) : (
-          upcomingExams.map((exam, idx) => (
-            <View key={exam.id} style={styles.examCardRow}>
-              <View style={styles.examInfo}>
-                <Text style={styles.examTitle}>{exam.course}</Text>
-                <Text style={styles.examMeta}>{exam.date} | {exam.duration}</Text>
-              </View>
-              <TouchableOpacity
-                style={styles.startExamButton}
-                onPress={() => navigation.navigate('ExamAttemptScreen')}
-              >
-                <Icon name="play-arrow" size={20} color="#fff" />
-                <Text style={styles.startExamButtonText}>Start Exam</Text>
-              </TouchableOpacity>
-            </View>
-          ))
+          upcomingExams.map((exam, idx) => 
+            renderUpcomingExam(exam)
+          )
         )}
       </View>
 

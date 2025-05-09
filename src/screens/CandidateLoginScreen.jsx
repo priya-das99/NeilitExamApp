@@ -13,6 +13,8 @@ import {
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useAppwrite } from '../utils/AppwriteContext';
 import { useAuthNavigation } from '../hooks/useAuthNavigation';
+import { databases, appwriteConfig } from '../utils/appwriteConfig';
+import { Query } from 'appwrite';
 
 const CandidateLoginScreen = ({ navigation }) => {
   const { 
@@ -28,6 +30,7 @@ const CandidateLoginScreen = ({ navigation }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [localError, setLocalError] = useState('');
   const [localLoading, setLocalLoading] = useState(false);
+  const [pendingRole, setPendingRole] = useState(null);
   
   // Animation refs
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -36,7 +39,6 @@ const CandidateLoginScreen = ({ navigation }) => {
   // Handle auth state changes (backup navigation)
   useEffect(() => {
     if (isLoggedIn && user?.preferences?.role) {
-      console.log('Effect navigation triggered');
       navigateByRole(user.preferences.role);
     }
   }, [isLoggedIn, user]);
@@ -91,19 +93,14 @@ const CandidateLoginScreen = ({ navigation }) => {
 
   const handleLoginAttempt = async () => {
     if (!validateCredentials()) return;
-    
     setLocalLoading(true);
     setLocalError('');
-    
     try {
       const user = await handleLogin(email, password);
-      
-      // Immediate navigation after successful login
-      console.log('Login successful, navigating to:', user.preferences.role);
-      navigateByRole(user.preferences.role);
-      
+      // Success handled in useEffect
     } catch (error) {
       handleLoginError(error);
+      setLocalError(error.message || 'Login failed. Please try again.');
     } finally {
       setLocalLoading(false);
     }

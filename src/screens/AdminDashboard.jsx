@@ -22,6 +22,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAppwrite } from '../utils/AppwriteContext';
 import { AuthService } from '../utils/authService';
 import AdminSidebar from '../components/AdminSidebar';
+import { databases, appwriteConfig } from '../utils/appwriteConfig';
 
 const defaultUserAvatar = require('../../assets/images/exam.jpg');
 
@@ -34,6 +35,9 @@ const AdminDashboard = () => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(0.9)).current;
+  const [examCount, setExamCount] = useState(null);
+  const [studentCount, setStudentCount] = useState(null);
+  const [courseCount, setCourseCount] = useState(null);
 
   // Admin cards data
   const adminCards = [
@@ -68,6 +72,14 @@ const AdminDashboard = () => {
       icon: 'analytics',
       color: '#9C27B0',
       onPress: () => navigation.navigate('ResultsAnalytics')
+    },
+    {
+      id: '5',
+      title: 'Manage Questions',
+      subtitle: 'View, add, edit, delete questions',
+      icon: 'quiz',
+      color: '#00BCD4',
+      onPress: () => navigation.navigate('ManageQuestions')
     }
   ];
 
@@ -117,6 +129,27 @@ const AdminDashboard = () => {
     };
     loadAdminProfile();
   }, [user]);
+
+  useEffect(() => {
+    let intervalId;
+    const fetchCounts = async () => {
+      try {
+        const examsRes = await databases.listDocuments(appwriteConfig.databaseId, appwriteConfig.examsCollectionId, [ ]);
+        setExamCount(examsRes.total);
+        const studentsRes = await databases.listDocuments(appwriteConfig.databaseId, appwriteConfig.studentsCollectionId, [ ]);
+        setStudentCount(studentsRes.total);
+        const coursesRes = await databases.listDocuments(appwriteConfig.databaseId, appwriteConfig.coursesCollectionId, [ ]);
+        setCourseCount(coursesRes.total);
+      } catch (err) {
+        setExamCount(0);
+        setStudentCount(0);
+        setCourseCount(0);
+      }
+    };
+    fetchCounts();
+    intervalId = setInterval(fetchCounts, 30000); // Refresh every 30 seconds
+    return () => clearInterval(intervalId);
+  }, []);
 
   const onLogout = async () => {
     try {
@@ -264,15 +297,15 @@ const AdminDashboard = () => {
             {/* Quick Stats */}
             <View style={styles.statsContainer}>
               <View style={styles.statCard}>
-                <Text style={styles.statNumber}>25</Text>
+                <Text style={styles.statNumber}>{examCount === null ? <ActivityIndicator size="small" color="#00e4d0" /> : examCount}</Text>
                 <Text style={styles.statLabel}>Active Exams</Text>
               </View>
               <View style={styles.statCard}>
-                <Text style={styles.statNumber}>150</Text>
+                <Text style={styles.statNumber}>{studentCount === null ? <ActivityIndicator size="small" color="#00e4d0" /> : studentCount}</Text>
                 <Text style={styles.statLabel}>Students</Text>
               </View>
               <View style={styles.statCard}>
-                <Text style={styles.statNumber}>4</Text>
+                <Text style={styles.statNumber}>{courseCount === null ? <ActivityIndicator size="small" color="#00e4d0" /> : courseCount}</Text>
                 <Text style={styles.statLabel}>Courses</Text>
               </View>
             </View>
