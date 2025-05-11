@@ -13,6 +13,7 @@ import {
   Modal,
   ActivityIndicator,
   Button,
+  FlatList,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import AdminSidebar from '../components/AdminSidebar';
@@ -27,6 +28,8 @@ import { Query } from 'appwrite';
 import { Image as RNImage } from 'react-native';
 import ImageResizer from 'react-native-image-resizer';
 import QuestionSearch from '../components/QuestionSearch';
+
+import VerticalTagSelector from '../components/VerticalTagSelector';
 
 const EditExam = () => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -59,17 +62,77 @@ const EditExam = () => {
   const [loadingExam, setLoadingExam] = useState(true);
   const [saving, setSaving] = useState(false);
   const [showQuestionSearch, setShowQuestionSearch] = useState(false);
+  const [allTags, setAllTags] = useState([]);
+  const [allQuestions, setAllQuestions] = useState([]);
+  const [filteredQuestions, setFilteredQuestions] = useState([]);
+  const [selectedTags, setSelectedTags] = useState([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [questionUI, setQuestionUI] = useState([]);
+  const [questionSuggestions, setQuestionSuggestions] = useState([]);
+  const [showSuggestionDropdown, setShowSuggestionDropdown] = useState([]);
+  const [showTagModal, setShowTagModal] = useState(Array(questions.length).fill(false));
+  const [showAllTagsMode, setShowAllTagsMode] = useState(Array(questions.length).fill(false));
+
+  useEffect(() => {
+    const fetchAllQuestions = async () => {
+      try {
+        const res = await databases.listDocuments(appwriteConfig.databaseId, appwriteConfig.questionsCollectionId);
+        const questions = res.documents.map(q => ({
+          ...q,
+          options: q.options ? JSON.parse(q.options) : [],
+          correctAnswers: q.correctAnswers ? JSON.parse(q.correctAnswers).map(a => a.charCodeAt(0) - 97) : [],
+          tags: Array.isArray(q.tags)
+            ? q.tags
+            : (q.tags
+                ? q.tags.split(',').map(tag => tag.trim()).filter(tag => tag)
+                : [])
+        }));
+        setAllQuestions(questions);
+        setFilteredQuestions(questions);
+        
+        // Extract all unique tags
+        const tagSet = new Set();
+        questions.forEach(q => q.tags.forEach(tag => tag && tagSet.add(tag)));
+        setAllTags(Array.from(tagSet));
+        console.log('Loaded tags:', {
+          questionsCount: questions.length,
+          allTags: Array.from(tagSet),
+          allTagsCount: tagSet.size
+        });
+      } catch (err) {
+        Alert.alert('Error', 'Failed to load questions from question bank');
+      }
+    };
+    fetchAllQuestions();
+  }, []);
+
+  // Add new useEffect for filtering questions
+  useEffect(() => {
+    const query = searchQuery.trim().toLowerCase();
+    setFilteredQuestions(
+      allQuestions.filter(q => {
+        const matchesSearch = !query || 
+          (q.questionText || q.text || '').toLowerCase().includes(query) ||
+          (Array.isArray(q.tags) && q.tags.some(tag => tag.toLowerCase().includes(query)));
+        const matchesTags = selectedTags.length === 0 || 
+          (Array.isArray(q.tags) && selectedTags.every(tag => q.tags.includes(tag)));
+        return matchesSearch && matchesTags;
+      })
+    );
+  }, [searchQuery, selectedTags, allQuestions]);
 
   useEffect(() => {
     fetchInitialData();
   }, []);
 
   const fetchInitialData = async () => {
+    Alert.alert('Debug', 'fetchInitialData called');
     setLoadingExam(true);
     try {
       // Fetch courses
       const coursesRes = await databases.listDocuments(appwriteConfig.databaseId, appwriteConfig.coursesCollectionId);
       setCourses(coursesRes.documents);
+
       // Fetch exam
       const examRes = await databases.getDocument(appwriteConfig.databaseId, appwriteConfig.examsCollectionId, examId);
       setExamData({
@@ -81,16 +144,68 @@ const EditExam = () => {
         status: examRes.status || 'scheduled',
       });
       setSelectedCourse(examRes.courseId);
-      setSubjectName(examRes.subjectId || '');
+
+      // Fetch subject name using subjectId
+      if (examRes.subjectId) {
+        try {
+          const subjectRes = await databases.getDocument(
+            appwriteConfig.databaseId,
+            appwriteConfig.subjectsCollectionId,
+            examRes.subjectId
+          );
+          setSubjectName(subjectRes.name || '');
+        } catch (err) {
+          console.error('Error fetching subject:', err);
+          setSubjectName('');
+        }
+      }
+
       setStartDate(new Date(examRes.startTime));
       setStartTime(new Date(examRes.startTime));
       setEndDate(new Date(examRes.endTime));
       setEndTime(new Date(examRes.endTime));
-      // Fetch questions
-      const questionsRes = await databases.listDocuments(appwriteConfig.databaseId, appwriteConfig.questionsCollectionId, [Query.equal('examId', examId)]);
-      setQuestions(questionsRes.documents.map(q => ({
+
+      // Fetch questions through exam_questions mapping
+      const examQuestionsRes = await databases.listDocuments(
+        appwriteConfig.databaseId,
+        appwriteConfig.examQuestionsCollectionId,
+        [Query.equal('examId', examId), Query.orderAsc('order')]
+      );
+
+      // Get all question IDs from exam_questions
+      const questionIds = examQuestionsRes.documents.map(eq => eq.questionId);
+
+      Alert.alert('Debug', `questionIds: ${JSON.stringify(questionIds)}`);
+
+      // If no questions found, set empty array
+      if (questionIds.length === 0) {
+        setQuestions([]);
+        return;
+      }
+
+      // Fetch all questions in a single query using questionId
+      const questionsRes = await databases.listDocuments(
+        appwriteConfig.databaseId,
+        appwriteConfig.questionsCollectionId,
+        [Query.equal('questionId', questionIds)]
+      );
+
+      console.log('Fetched questions:', questionsRes.documents);
+      Alert.alert('Debug', `Fetched questions: ${questionsRes.documents.length}`);
+
+      // Create a map of exam_questions data for ordering
+      const examQuestionsMap = {};
+      examQuestionsRes.documents.forEach(eq => {
+        examQuestionsMap[eq.questionId] = {
+          order: eq.order,
+          createdAt: eq.createdAt
+        };
+      });
+
+      // Process and set questions with their order from exam_questions
+      const processedQuestions = questionsRes.documents.map(q => ({
         ...q,
-        text: q.questionText,
+        text: q.questionText || q.text || '',
         options: q.options ? JSON.parse(q.options) : [
           { text: '', image: null },
           { text: '', image: null },
@@ -102,14 +217,47 @@ const EditExam = () => {
         type: q.type || 'mcq',
         marks: q.marks || 1,
         difficulty: q.difficulty || 'easy',
-        tags: Array.isArray(q.tags) ? q.tags.join(', ') : (q.tags || '')
-      })));
+        tags: Array.isArray(q.tags) ? q.tags.join(', ') : (q.tags || ''),
+        order: examQuestionsMap[q.questionId]?.order || 0
+      }));
+
+      console.log('Processed questions:', processedQuestions);
+      Alert.alert('Debug', `Processed questions: ${processedQuestions.length}`);
+
+      // Sort questions by order
+      processedQuestions.sort((a, b) => a.order - b.order);
+      setQuestions(processedQuestions);
+
     } catch (err) {
+      console.error('Error fetching exam data:', err);
       Alert.alert('Error', 'Failed to load exam details');
     } finally {
       setLoadingExam(false);
     }
   };
+
+  useEffect(() => {
+    setQuestionUI(questions.map(q => ({
+      searchText: '',
+      selectedTags: Array.isArray(q.tags) ? q.tags : (q.tags ? q.tags.split(',').map(t => t.trim()) : []),
+      showTagDropdown: false,
+      suggestions: [],
+      selectedDifficulty: q.difficulty || 'easy',
+      showAllTags: false,
+    })));
+  }, [questions.length]);
+
+  useEffect(() => {
+    // Initialize suggestion states for each question
+    setQuestionSuggestions(questions.map(() => []));
+    setShowSuggestionDropdown(questions.map(() => false));
+  }, [questions.length]);
+
+  // Add new useEffect for tag modal states
+  useEffect(() => {
+    setShowTagModal(Array(questions.length).fill(false));
+    setShowAllTagsMode(Array(questions.length).fill(false));
+  }, [questions.length]);
 
   const handleInputChange = (field, value) => {
     setExamData(prev => ({ ...prev, [field]: value }));
@@ -339,6 +487,7 @@ const EditExam = () => {
       combinedEnd.setMinutes(endTime.getMinutes());
       combinedEnd.setSeconds(0);
       combinedEnd.setMilliseconds(0);
+
       // Update exam
       await databases.updateDocument(
         appwriteConfig.databaseId,
@@ -355,12 +504,27 @@ const EditExam = () => {
           endTime: combinedEnd.toISOString(),
         }
       );
-      // Update or create questions
+
+      // Delete existing exam_questions mappings
+      const existingMappings = await databases.listDocuments(
+        appwriteConfig.databaseId,
+        appwriteConfig.examQuestionsCollectionId,
+        [Query.equal("examId", examId)]
+      );
+      for (const mapping of existingMappings.documents) {
+        await databases.deleteDocument(
+          appwriteConfig.databaseId,
+          appwriteConfig.examQuestionsCollectionId,
+          mapping.$id
+        );
+      }
+      // Now update/create questions and create new mappings
       for (const [idx, q] of questions.entries()) {
         let imageId = q.imageId;
         if (q.image && q.image.uri && !q.imageId) {
           imageId = await uploadImageToAppwrite(q.image);
         }
+
         const optionsWithImages = await Promise.all(q.options.map(async (opt, i) => {
           let optionImageId = opt.imageId;
           if (opt.image && opt.image.uri && !opt.imageId) {
@@ -372,9 +536,9 @@ const EditExam = () => {
             imageId: optionImageId
           };
         }));
+
         const data = {
           examId: examId,
-          questionId: q.questionId || `Q${idx + 1}`,
           subjectId: subjectName,
           courseId: selectedCourse,
           type: q.type,
@@ -384,8 +548,11 @@ const EditExam = () => {
           correctAnswers: JSON.stringify(q.correctAnswers.map(i => String.fromCharCode(97 + i))),
           marks: Number(q.marks) || 1,
           difficulty: q.difficulty,
-          tags: q.tags.split(',').map(tag => tag.trim()).filter(tag => tag !== '')
+          tags: q.tags.split(',').map(tag => tag.trim()).filter(tag => tag !== ''),
+          questionId: q.questionId || ID.unique()
         };
+
+        let questionId = q.questionId || ID.unique();
         if (q.$id) {
           await databases.updateDocument(
             appwriteConfig.databaseId,
@@ -394,14 +561,46 @@ const EditExam = () => {
             data
           );
         } else {
-          await databases.createDocument(
+          const newQuestion = await databases.createDocument(
             appwriteConfig.databaseId,
             appwriteConfig.questionsCollectionId,
             ID.unique(),
             data
           );
+          questionId = newQuestion.questionId;
+        }
+         // Create/update exam_questions mapping
+      await databases.createDocument(
+        appwriteConfig.databaseId,
+        appwriteConfig.examQuestionsCollectionId,
+        ID.unique(),
+        {
+          examId: examId,
+          questionId: q.questionId || questionId,
+          order: idx + 1
+        }
+      );
+    
+        // Create new mapping in exam_questions table
+        try {
+          await databases.createDocument(
+            appwriteConfig.databaseId,
+            appwriteConfig.examQuestionsCollectionId,
+            ID.unique(),
+            {
+              examId: examId,
+              questionId: questionId,
+              order: idx + 1,
+              createdAt: new Date().toISOString()
+            }
+          );
+          console.log('Mapping created for question', questionId);
+        } catch (err) {
+          console.error('Error creating mapping:', err);
+          Alert.alert('Error creating mapping', err.message || String(err));
         }
       }
+
       Alert.alert('Success', 'Exam updated successfully', [
         { text: 'OK', onPress: () => navigation.navigate('ManageExams') }
       ]);
@@ -422,10 +621,358 @@ const EditExam = () => {
       options: selectedQuestion.options || [],
       correctAnswers: selectedQuestion.correctAnswers || [],
       image: selectedQuestion.image || null,
+      questionId: selectedQuestion.questionId
     };
 
     setQuestions(prev => [...prev, newQuestion]);
     setShowQuestionSearch(false);
+  };
+
+  const handleSearchTextChange = (qIdx, text) => {
+    setSearchQuery(text);
+    setQuestionUI(prev => prev.map((ui, i) => i === qIdx ? { ...ui, searchText: text } : ui));
+    updateSuggestions(qIdx, text, questionUI[qIdx]?.selectedTags || []);
+  };
+  const handleTagDropdownToggle = (qIdx) => {
+    setQuestionUI(prev => prev.map((ui, i) => i === qIdx ? { ...ui, showTagDropdown: !ui.showTagDropdown } : ui));
+  };
+  const handleTagSelect = (qIdx, tag) => {
+    setSelectedTags(prev => {
+      const newTags = prev.includes(tag)
+        ? prev.filter(t => t !== tag)
+        : [...prev, tag];
+      return newTags;
+    });
+    setQuestionUI(prev => prev.map((ui, i) => {
+      if (i !== qIdx) return ui;
+      const selected = ui.selectedTags.includes(tag)
+        ? ui.selectedTags.filter(t => t !== tag)
+        : [...ui.selectedTags, tag];
+      updateSuggestions(qIdx, ui.searchText, selected);
+      return { ...ui, selectedTags: selected };
+    }));
+  };
+  const handleDifficultyChange = (qIdx, diff) => {
+    setQuestionUI(prev => prev.map((ui, i) => i === qIdx ? { ...ui, selectedDifficulty: diff } : ui));
+    // Reset selected tags if current tags are not in the new tag list
+    const newTags = getTagsForQuestion(diff, questionUI[qIdx].showAllTags);
+    const filteredSelectedTags = questionUI[qIdx].selectedTags.filter(tag => newTags.includes(tag));
+    setQuestionUI(prev => prev.map((ui, i) => i === qIdx ? { ...ui, selectedTags: filteredSelectedTags } : ui));
+    updateSuggestions(qIdx, questionUI[qIdx].searchText, filteredSelectedTags);
+  };
+  const handleAllTagsToggle = (qIdx) => {
+    setQuestionUI(prev => prev.map((ui, i) => i === qIdx ? { ...ui, showAllTags: !ui.showAllTags } : ui));
+    // Reset selected tags if current tags are not in the new tag list
+    const newTags = getTagsForQuestion(questionUI[qIdx].selectedDifficulty, !questionUI[qIdx].showAllTags);
+    const filteredSelectedTags = questionUI[qIdx].selectedTags.filter(tag => newTags.includes(tag));
+    setQuestionUI(prev => prev.map((ui, i) => i === qIdx ? { ...ui, selectedTags: filteredSelectedTags } : ui));
+    updateSuggestions(qIdx, questionUI[qIdx].searchText, filteredSelectedTags);
+  };
+  const updateSuggestions = (qIdx, search, tags) => {
+    const query = (search || '').trim().toLowerCase();
+    const selectedTags = Array.isArray(tags) ? tags : [];
+    const hasSearch = !!query;
+    const hasTags = selectedTags.length > 0;
+
+    // Get current question texts to avoid suggesting duplicates
+    const currentQuestionTexts = questions.map(q => (q.text || '').trim().toLowerCase());
+    
+    // Split search query into words for better matching
+    const searchWords = query.split(/\s+/).filter(word => word.length > 0);
+    
+    let filtered = allQuestions.filter(q => {
+      // Skip if question is already in the exam
+      if (currentQuestionTexts.includes((q.questionText || '').trim().toLowerCase())) {
+        return false;
+      }
+
+      const qTags = Array.isArray(q.tags) ? q.tags : (q.tags ? q.tags.split(',').map(t => t.trim()) : []);
+      const questionText = (q.questionText || '').toLowerCase();
+      
+      // If tags are selected, question must have at least one of the selected tags
+      if (hasTags) {
+        const hasMatchingTag = selectedTags.some(tag => qTags.includes(tag));
+        if (!hasMatchingTag) return false;
+      }
+
+      // If search query exists, question must match the search
+      if (hasSearch) {
+        // Check if any search word matches the question text or tags
+        const matchesSearch = searchWords.some(word => {
+          // Match in question text
+          if (questionText.includes(word)) return true;
+          
+          // Match in tags
+          if (qTags.some(tag => tag.toLowerCase().includes(word))) return true;
+          
+          return false;
+        });
+        
+        if (!matchesSearch) return false;
+      }
+
+      return true;
+    });
+
+    // Sort by relevance
+    filtered.sort((a, b) => {
+      const aTags = Array.isArray(a.tags) ? a.tags : (a.tags ? a.tags.split(',').map(t => t.trim()) : []);
+      const bTags = Array.isArray(b.tags) ? b.tags : (b.tags ? b.tags.split(',').map(t => t.trim()) : []);
+      const aText = (a.questionText || '').toLowerCase();
+      const bText = (b.questionText || '').toLowerCase();
+      
+      // Calculate relevance scores
+      const calculateScore = (text, tags) => {
+        let score = 0;
+        
+        // Count matching words in text
+        searchWords.forEach(word => {
+          if (text.includes(word)) score += 2;
+        });
+        
+        // Count matching tags
+        if (hasTags) {
+          const matchingTags = tags.filter(tag => selectedTags.includes(tag)).length;
+          score += matchingTags * 3;
+        }
+        
+        // Bonus for exact matches
+        if (text.includes(query)) score += 5;
+        
+        return score;
+      };
+      
+      const aScore = calculateScore(aText, aTags);
+      const bScore = calculateScore(bText, bTags);
+      
+      return bScore - aScore;
+    });
+
+    filtered = filtered.slice(0, 5);
+    setQuestionSuggestions(prev => prev.map((arr, i) => i === qIdx ? filtered : arr));
+    setShowSuggestionDropdown(prev => prev.map((val, i) => i === qIdx ? filtered.length > 0 : val));
+  };
+  const handleSuggestionSelect = (qIdx, suggestion) => {
+    // Fill question fields with suggestion
+    handleQuestionChange(qIdx, 'text', suggestion.questionText || suggestion.text || '');
+    handleQuestionChange(qIdx, 'type', suggestion.type || 'mcq');
+    handleQuestionChange(qIdx, 'marks', suggestion.marks || 1);
+    handleQuestionChange(qIdx, 'difficulty', suggestion.difficulty || 'easy');
+    handleQuestionChange(qIdx, 'tags', Array.isArray(suggestion.tags) ? suggestion.tags.join(', ') : (suggestion.tags || ''));
+    setQuestions(prev => prev.map((q, i) => i === qIdx ? {
+      ...q,
+      options: suggestion.options || [
+        { text: '', image: null },
+        { text: '', image: null },
+        { text: '', image: null },
+        { text: '', image: null }
+      ],
+      correctAnswers: suggestion.correctAnswers || [],
+      image: suggestion.image || null,
+      questionId: suggestion.questionId
+    } : q));
+    setQuestionSuggestions(prev => prev.map((arr, i) => i === qIdx ? [] : arr));
+    setShowSuggestionDropdown(prev => prev.map((val, i) => i === qIdx ? false : val));
+  };
+
+  const getTagsForQuestion = (selectedDifficulty, showAllTags) => {
+    if (showAllTags) return allTags;
+    // Only tags used by questions of this difficulty
+    const tagsSet = new Set();
+    allQuestions.forEach(q => {
+      if ((q.difficulty || 'easy') === selectedDifficulty) {
+        (Array.isArray(q.tags) ? q.tags : (q.tags ? q.tags.split(',').map(t => t.trim()) : [])).forEach(tag => tagsSet.add(tag));
+      }
+    });
+    return Array.from(tagsSet);
+  };
+
+  // Update renderQuestionSearch function
+  const renderQuestionSearch = (qIdx) => {
+    const hasSearch = questionUI[qIdx]?.searchText?.trim();
+    const hasTags = questionUI[qIdx]?.selectedTags?.length > 0;
+    
+    return (
+      <View style={{ marginBottom: 10, position: 'relative' }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <View style={{ 
+            flex: 1, 
+            flexDirection: 'row', 
+            alignItems: 'center', 
+            backgroundColor: '#f5f7fa', 
+            borderRadius: 24, 
+            paddingHorizontal: 12, 
+            height: 40, 
+            borderWidth: 1, 
+            borderColor: '#e0e0e0' 
+          }}>
+            <Icon name="search" size={20} color="#1976d2" style={{ marginRight: 6 }} />
+            <TextInput
+              style={{ flex: 1, fontSize: 15, color: '#222' }}
+              placeholder="Search questions or keywords"
+              value={questionUI[qIdx]?.searchText || ''}
+              onChangeText={text => handleSearchTextChange(qIdx, text)}
+              placeholderTextColor="#aaa"
+            />
+          </View>
+          
+          <TouchableOpacity
+            style={{ 
+              marginLeft: 10, 
+              backgroundColor: '#e3f0fc', 
+              borderRadius: 20, 
+              paddingHorizontal: 14, 
+              height: 40, 
+              justifyContent: 'center', 
+              alignItems: 'center', 
+              borderWidth: 1, 
+              borderColor: '#1976d2' 
+            }}
+            onPress={() => setShowTagModal(prev => prev.map((v, i) => i === qIdx ? true : false))}
+          >
+            <Text style={{ color: '#1976d2', fontWeight: 'bold', fontSize: 15 }}>+ Select Tags</Text>
+          </TouchableOpacity>
+        </View>
+        
+        {/* Selected Tags Display */}
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 8 }}>
+          {(questionUI[qIdx]?.selectedTags || []).map((tag, tIdx) => (
+            <View key={tIdx} style={{ 
+              backgroundColor: '#1976d2', 
+              borderRadius: 12, 
+              paddingHorizontal: 10, 
+              paddingVertical: 4, 
+              marginRight: 6, 
+              marginBottom: 6, 
+              flexDirection: 'row', 
+              alignItems: 'center' 
+            }}>
+              <Text style={{ color: '#fff', fontSize: 13 }}>{tag}</Text>
+              <TouchableOpacity 
+                onPress={() => handleTagSelect(qIdx, tag)} 
+                style={{ marginLeft: 4 }}
+              >
+                <Icon name="close" size={15} color="#fff" />
+              </TouchableOpacity>
+            </View>
+          ))}
+        </View>
+        
+        {showSuggestionDropdown[qIdx] && questionSuggestions[qIdx]?.length > 0 && (hasSearch || hasTags) && (
+          <View style={styles.suggestionContainer}>
+            <ScrollView 
+              style={styles.scrollableBox}
+              nestedScrollEnabled={true}
+            >
+              {questionSuggestions[qIdx].map((question, index) => (
+                <TouchableOpacity
+                  key={index}
+                  style={styles.suggestionItem}
+                  onPress={() => handleSuggestionSelect(qIdx, question)}
+                >
+                  <Text style={styles.questionText}>{question.questionText || question.text}</Text>
+                  <Text style={styles.tagText}>
+                    Tags: {Array.isArray(question.tags) ? question.tags.join(', ') : question.tags}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        )}
+        
+        {renderTagDropdown(qIdx)}
+      </View>
+    );
+  };
+
+  // Update the tag dropdown rendering to use VerticalTagSelector
+  const renderTagDropdown = (qIdx) => {
+    if (!showTagModal[qIdx]) return null;
+
+    // Filter tags by selected difficulty for this question
+    const filteredTags = allQuestions
+      .filter(qq => qq.difficulty === questions[qIdx].difficulty)
+      .flatMap(qq => Array.isArray(qq.tags) ? qq.tags : (qq.tags ? qq.tags.split(',').map(t => t.trim()) : []));
+    const uniqueFilteredTags = Array.from(new Set(filteredTags));
+    const tagsToShow = showAllTagsMode[qIdx] ? allTags : uniqueFilteredTags;
+
+    console.log('Debug tag modal:', {
+      questionDifficulty: questions[qIdx].difficulty,
+      allQuestionsLength: allQuestions.length,
+      filteredTagsLength: filteredTags.length,
+      uniqueFilteredTagsLength: uniqueFilteredTags.length,
+      allTagsLength: allTags.length,
+      tagsToShowLength: tagsToShow.length,
+      showAllTagsMode: showAllTagsMode[qIdx]
+    });
+
+    return (
+      <Modal
+        visible={showTagModal[qIdx]}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowTagModal(prev => prev.map((v, i) => i === qIdx ? false : v))}
+      >
+        <TouchableOpacity 
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.2)' }} 
+          activeOpacity={1} 
+          onPress={() => setShowTagModal(prev => prev.map((v, i) => i === qIdx ? false : v))}
+        >
+          <View style={{ 
+            position: 'absolute', 
+            top: 120, 
+            left: 30, 
+            right: 30, 
+            backgroundColor: '#fff', 
+            borderRadius: 12, 
+            padding: 18, 
+            elevation: 5 
+          }}>
+            <Text style={{ fontWeight: 'bold', fontSize: 16, marginBottom: 10 }}>Select Tags</Text>
+            
+            <TouchableOpacity
+              style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}
+              onPress={() => {
+                setShowAllTagsMode(prev => prev.map((v, i) => i === qIdx ? !v : v));
+              }}
+            >
+              <Icon 
+                name={showAllTagsMode[qIdx] ? 'check-box' : 'check-box-outline-blank'} 
+                size={18} 
+                color={showAllTagsMode[qIdx] ? '#1976d2' : '#aaa'} 
+                style={{ marginRight: 8 }} 
+              />
+              <Text style={{ color: '#1976d2', fontWeight: 'bold' }}>Show All Tags</Text>
+            </TouchableOpacity>
+            
+            <ScrollView style={{ maxHeight: 180 }}>
+              {tagsToShow.map(tag => (
+                <TouchableOpacity
+                  key={tag}
+                  style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}
+                  onPress={() => handleTagSelect(qIdx, tag)}
+                >
+                  <Icon 
+                    name={questionUI[qIdx]?.selectedTags?.includes(tag) ? 'check-box' : 'check-box-outline-blank'} 
+                    size={18} 
+                    color={questionUI[qIdx]?.selectedTags?.includes(tag) ? '#1976d2' : '#aaa'} 
+                    style={{ marginRight: 8 }} 
+                  />
+                  <Text style={{ color: '#333', fontSize: 15 }}>{tag}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            
+            <TouchableOpacity 
+              style={{ alignSelf: 'flex-end', marginTop: 10 }} 
+              onPress={() => setShowTagModal(prev => prev.map((v, i) => i === qIdx ? false : v))}
+            >
+              <Text style={{ color: '#1976d2', fontWeight: 'bold' }}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+    );
   };
 
   if (loadingExam) {
@@ -448,7 +995,7 @@ const EditExam = () => {
           <Text style={styles.headerTitle}>Edit Exam</Text>
           <View style={{ width: 24 }} />
         </View>
-        <ScrollView style={styles.content}>
+        <ScrollView style={styles.content} nestedScrollEnabled={true}>
           <View style={styles.formContainer}>
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Course *</Text>
@@ -577,82 +1124,82 @@ const EditExam = () => {
               )}
             </View>
             <View style={styles.inputGroup}>
-              <View style={styles.questionHeader}>
-                <Text style={styles.label}>Questions *</Text>
-                <TouchableOpacity 
-                  style={styles.searchButton}
-                  onPress={() => setShowQuestionSearch(true)}
-                >
-                  <Icon name="search" size={20} color="#fff" />
-                  <Text style={styles.searchButtonText}>Search Questions</Text>
-                </TouchableOpacity>
-              </View>
-              
-              {showQuestionSearch ? (
-                <View style={styles.searchContainer}>
-                  <QuestionSearch
-                    onQuestionSelect={handleQuestionSelect}
-                    onTagsChange={() => {}}
-                  />
-                </View>
-              ) : (
-                <>
-                  {questions.map((q, qIdx) => (
-                    <View key={qIdx} style={{ marginBottom: 20, borderWidth: 1, borderColor: '#eee', borderRadius: 8, padding: 10 }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                        <Text style={{ fontWeight: 'bold', fontSize: 16, marginRight: 8 }}>{`Question ${qIdx + 1}`}</Text>
-                        <TextInput
-                          style={[styles.input, { flex: 1 }]}
-                          value={q.text}
-                          onChangeText={text => handleQuestionChange(qIdx, 'text', text)}
-                          placeholder={`Enter question text`}
+              <Text style={styles.label}>Questions *</Text>
+              {questions.map((q, qIdx) => (
+                <View key={qIdx} style={{ marginBottom: 20, borderWidth: 1, borderColor: '#eee', borderRadius: 8, padding: 10 }}>
+                  {renderQuestionSearch(qIdx)}
+                  {renderTagDropdown(qIdx)}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                    <Text style={{ fontSize: 15, marginRight: 8 }}>Marks</Text>
+                    <TextInput
+                      style={[styles.input, { width: 80 }]}
+                      value={q.marks ? String(q.marks) : ''}
+                      onChangeText={text => handleQuestionChange(qIdx, 'marks', text.replace(/[^0-9]/g, ''))}
+                      placeholder="1"
+                      keyboardType="numeric"
+                    />
+                  </View>
+                  <View style={{ marginBottom: 8 }}>
+                    <Text style={styles.label}>Difficulty Level *</Text>
+                    <View style={{ borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 8, overflow: 'hidden', backgroundColor: '#fff', marginTop: 4 }}>
+                      <Picker
+                        selectedValue={q.difficulty}
+                        onValueChange={value => handleQuestionChange(qIdx, 'difficulty', value)}
+                        style={{ height: 51, width: '100%', fontSize: 18, paddingVertical: 10 }}
+                        itemStyle={{ fontSize: 18, height: 48 }}
+                        dropdownIconColor="#1976d2"
+                      >
+                        <Picker.Item label="Easy" value="easy" />
+                        <Picker.Item label="Medium" value="medium" />
+                        <Picker.Item label="Hard" value="hard" />
+                      </Picker>
+                    </View>
+                  </View>
+                  <View style={{ marginBottom: 8 }}>
+                    <Text style={styles.label}>Type</Text>
+                    <View style={{ borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 8, overflow: 'hidden', backgroundColor: '#fff', marginTop: 4 }}>
+                      <Picker
+                        selectedValue={q.type}
+                        onValueChange={type => handleQuestionTypeChange(qIdx, type)}
+                        style={{ height: 51, width: '100%', fontSize: 18, paddingVertical: 10 }}
+                        itemStyle={{ fontSize: 18, height: 48 }}
+                        dropdownIconColor="#1976d2"
+                      >
+                        <Picker.Item label="MCQ" value="mcq" />
+                        <Picker.Item label="MSQ" value="msq" />
+                      </Picker>
+                    </View>
+                  </View>
+                  <View style={{ marginBottom: 8 }}>
+                    <Text style={styles.label}>Question Text *</Text>
+                    <TextInput
+                      style={[styles.input, styles.textArea]}
+                      value={q.text}
+                      onChangeText={text => handleQuestionChange(qIdx, 'text', text)}
+                      placeholder="Enter your question"
+                      multiline
+                      numberOfLines={4}
+                    />
+                  </View>
+                  <Text style={styles.label}>Options</Text>
+                  {q.options.map((opt, optIdx) => (
+                    <View key={optIdx} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+                      <TouchableOpacity
+                        onPress={() => handleCorrectAnswerChange(qIdx, optIdx)}
+                        style={{ marginRight: 8 }}
+                      >
+                        <Icon
+                          name={q.correctAnswers.includes(optIdx) ? 'check-box' : 'check-box-outline-blank'}
+                          size={24}
+                          color={q.correctAnswers.includes(optIdx) ? '#1976d2' : '#aaa'}
                         />
-                      </View>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                        <Text style={{ fontSize: 15, marginRight: 8 }}>Marks</Text>
-                        <TextInput
-                          style={[styles.input, { width: 80 }]}
-                          value={q.marks ? String(q.marks) : ''}
-                          onChangeText={text => handleQuestionChange(qIdx, 'marks', text.replace(/[^0-9]/g, ''))}
-                          placeholder="1"
-                          keyboardType="numeric"
-                        />
-                      </View>
-                      <View style={{ marginBottom: 8 }}>
-                        <Text style={styles.label}>Type</Text>
-                        <View style={{ borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 8, overflow: 'hidden', backgroundColor: '#fff', marginTop: 4 }}>
-                          <Picker
-                            selectedValue={q.type}
-                            onValueChange={type => handleQuestionTypeChange(qIdx, type)}
-                            style={{ height: 51, width: '100%', fontSize: 18, paddingVertical: 10 }}
-                            itemStyle={{ fontSize: 18, height: 48 }}
-                            dropdownIconColor="#1976d2"
-                          >
-                            <Picker.Item label="MCQ" value="mcq" />
-                            <Picker.Item label="MSQ" value="msq" />
-                          </Picker>
-                        </View>
-                      </View>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                        <TouchableOpacity onPress={() => handleImagePick(qIdx)} style={{ marginRight: 10, flexDirection: 'row', alignItems: 'center' }}>
-                          <Icon name="image" size={20} color="#1976d2" />
-                          <Text style={{ color: '#1976d2', marginLeft: 5 }}>Upload an Image</Text>
-                        </TouchableOpacity>
-                        {q.image && (
-                          <TouchableOpacity onPress={() => handleRemoveImage(qIdx)} style={{ flexDirection: 'row', alignItems: 'center' }}>
-                            <Icon name="close" size={20} color="#f44336" />
-                            <Text style={{ color: '#f44336', marginLeft: 5 }}>Remove Image</Text>
-                          </TouchableOpacity>
-                        )}
-                      </View>
-                      {q.image && (
-                        <View
-                          style={{
+                      </TouchableOpacity>
+                      {opt.image ? (
+                        <View style={{ flex: 1, alignItems: 'center', marginBottom: 8 }}>
+                          <View style={{
                             width: '100%',
                             maxWidth: 320,
                             height: 180,
-                            alignSelf: 'center',
-                            marginBottom: 10,
                             borderRadius: 12,
                             backgroundColor: '#fff',
                             shadowColor: '#000',
@@ -662,129 +1209,112 @@ const EditExam = () => {
                             elevation: 3,
                             overflow: 'hidden',
                             justifyContent: 'center',
-                            alignItems: 'center'
-                          }}
-                        >
-                          <Image
-                            source={{ uri: q.image.uri }}
-                            style={{
-                              width: '100%',
-                              height: '100%',
-                              resizeMode: 'contain'
-                            }}
-                          />
-                        </View>
-                      )}
-                      <View style={{ marginBottom: 8 }}>
-                        <Text style={styles.label}>Difficulty Level *</Text>
-                        <View style={{ borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 8, overflow: 'hidden', backgroundColor: '#fff', marginTop: 4 }}>
-                          <Picker
-                            selectedValue={q.difficulty}
-                            onValueChange={value => handleQuestionChange(qIdx, 'difficulty', value)}
-                            style={{ height: 51, width: '100%', fontSize: 18, paddingVertical: 10 }}
-                            itemStyle={{ fontSize: 18, height: 48 }}
-                            dropdownIconColor="#1976d2"
-                          >
-                            <Picker.Item label="Easy" value="easy" />
-                            <Picker.Item label="Medium" value="medium" />
-                            <Picker.Item label="Hard" value="hard" />
-                          </Picker>
-                        </View>
-                      </View>
-                      <View style={{ marginBottom: 8 }}>
-                        <Text style={styles.label}>Tags (comma separated) *</Text>
-                        <TextInput
-                          style={styles.input}
-                          value={q.tags}
-                          onChangeText={text => handleQuestionChange(qIdx, 'tags', text)}
-                          placeholder="e.g. algebra, geometry, trigonometry"
-                        />
-                      </View>
-                      <Text style={styles.label}>Options</Text>
-                      {q.options.map((opt, optIdx) => (
-                        <View key={optIdx} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
-                          <TouchableOpacity
-                            onPress={() => handleCorrectAnswerChange(qIdx, optIdx)}
-                            style={{ marginRight: 8 }}
-                          >
-                            <Icon
-                              name={q.correctAnswers.includes(optIdx) ? 'check-box' : 'check-box-outline-blank'}
-                              size={24}
-                              color={q.correctAnswers.includes(optIdx) ? '#1976d2' : '#aaa'}
-                            />
-                          </TouchableOpacity>
-                          {opt.image ? (
-                            <View style={{ flex: 1, alignItems: 'center', marginBottom: 8 }}>
-                              <View style={{
+                            alignItems: 'center',
+                            marginBottom: 4
+                          }}>
+                            <Image
+                              source={{ uri: opt.image.uri }}
+                              style={{
                                 width: '100%',
-                                maxWidth: 320,
-                                height: 180,
-                                borderRadius: 12,
-                                backgroundColor: '#fff',
-                                shadowColor: '#000',
-                                shadowOffset: { width: 0, height: 2 },
-                                shadowOpacity: 0.15,
-                                shadowRadius: 4,
-                                elevation: 3,
-                                overflow: 'hidden',
-                                justifyContent: 'center',
-                                alignItems: 'center',
-                                marginBottom: 4
-                              }}>
-                                <Image
-                                  source={{ uri: opt.image.uri }}
-                                  style={{
-                                    width: '100%',
-                                    height: '100%',
-                                    resizeMode: 'contain'
-                                  }}
-                                />
-                              </View>
-                              <TouchableOpacity onPress={() => handleOptionRemoveImage(qIdx, optIdx)} style={{ marginTop: 2 }}>
-                                <Icon name="close" size={22} color="#f44336" />
-                              </TouchableOpacity>
-                            </View>
-                          ) : (
-                            <>
-                              <TextInput
-                                style={[styles.input, { flex: 1 }]}
-                                value={opt.text}
-                                onChangeText={text => handleOptionChange(qIdx, optIdx, text)}
-                                placeholder={`Option ${String.fromCharCode(65 + optIdx)}`}
-                              />
-                              <TouchableOpacity onPress={() => handleOptionImagePick(qIdx, optIdx)} style={{ marginLeft: 8 }}>
-                                <Icon name="image" size={20} color="#1976d2" />
-                              </TouchableOpacity>
-                            </>
-                          )}
+                                height: '100%',
+                                resizeMode: 'contain'
+                              }}
+                            />
+                          </View>
+                          <TouchableOpacity onPress={() => handleOptionRemoveImage(qIdx, optIdx)} style={{ marginTop: 2 }}>
+                            <Icon name="close" size={22} color="#f44336" />
+                          </TouchableOpacity>
                         </View>
-                      ))}
-                      {q.correctAnswers.length > 0 && (
-                        <View style={{ backgroundColor: '#f7f0ff', borderRadius: 8, padding: 10, marginTop: 10 }}>
-                          <Text style={{ color: '#8e24aa', fontWeight: 'bold' }}>Correct Answer:</Text>
-                          <Text style={{ color: '#8e24aa', marginTop: 2 }}>
-                            {q.correctAnswers.map(i => `Option ${i + 1}`).join(', ')}
-                          </Text>
-                        </View>
+                      ) : (
+                        <>
+                          <TextInput
+                            style={[styles.input, { flex: 1 }]}
+                            value={opt.text}
+                            onChangeText={text => handleOptionChange(qIdx, optIdx, text)}
+                            placeholder={`Option ${String.fromCharCode(65 + optIdx)}`}
+                          />
+                          <TouchableOpacity onPress={() => handleOptionImagePick(qIdx, optIdx)} style={{ marginLeft: 8 }}>
+                            <Icon name="image" size={20} color="#1976d2" />
+                          </TouchableOpacity>
+                        </>
                       )}
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 }}>
-                        <TouchableOpacity onPress={() => removeQuestion(qIdx)} style={{ backgroundColor: '#f44336', padding: 8, borderRadius: 6 }}>
-                          <Text style={{ color: '#fff' }}>Remove</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity onPress={addQuestion} style={{ backgroundColor: '#1976d2', padding: 8, borderRadius: 6 }}>
-                          <Text style={{ color: '#fff' }}>Add Question</Text>
-                        </TouchableOpacity>
-                      </View>
                     </View>
                   ))}
-                  {questions.length === 0 && (
-                    <View style={{ alignItems: 'center', marginVertical: 20 }}>
-                      <TouchableOpacity onPress={addQuestion} style={{ backgroundColor: '#1976d2', padding: 12, borderRadius: 8 }}>
-                        <Text style={{ color: '#fff', fontWeight: 'bold' }}>Add Question</Text>
-                      </TouchableOpacity>
+                  {q.correctAnswers.length > 0 && (
+                    <View style={{ backgroundColor: '#f7f0ff', borderRadius: 8, padding: 10, marginTop: 10 }}>
+                      <Text style={{ color: '#8e24aa', fontWeight: 'bold' }}>Correct Answer:</Text>
+                      <Text style={{ color: '#8e24aa', marginTop: 2 }}>
+                        {q.correctAnswers.map(i => `Option ${i + 1}`).join(', ')}
+                      </Text>
                     </View>
                   )}
-                </>
+                  <View style={{ marginBottom: 8 }}>
+                    <Text style={styles.label}>Tags (comma separated) *</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={q.tags}
+                      onChangeText={text => handleQuestionChange(qIdx, 'tags', text)}
+                      placeholder="e.g. algebra, geometry, trigonometry"
+                    />
+                  </View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                    <TouchableOpacity onPress={() => handleImagePick(qIdx)} style={{ marginRight: 10, flexDirection: 'row', alignItems: 'center' }}>
+                      <Icon name="image" size={20} color="#1976d2" />
+                      <Text style={{ color: '#1976d2', marginLeft: 5 }}>Upload an Image</Text>
+                    </TouchableOpacity>
+                    {q.image && (
+                      <TouchableOpacity onPress={() => handleRemoveImage(qIdx)} style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <Icon name="close" size={20} color="#f44336" />
+                        <Text style={{ color: '#f44336', marginLeft: 5 }}>Remove Image</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  {q.image && (
+                    <View
+                      style={{
+                        width: '100%',
+                        maxWidth: 320,
+                        height: 180,
+                        alignSelf: 'center',
+                        marginBottom: 10,
+                        borderRadius: 12,
+                        backgroundColor: '#fff',
+                        shadowColor: '#000',
+                        shadowOffset: { width: 0, height: 2 },
+                        shadowOpacity: 0.15,
+                        shadowRadius: 4,
+                        elevation: 3,
+                        overflow: 'hidden',
+                        justifyContent: 'center',
+                        alignItems: 'center'
+                      }}
+                    >
+                      <Image
+                        source={{ uri: q.image.uri }}
+                        style={{
+                          width: '100%',
+                          height: '100%',
+                          resizeMode: 'contain'
+                        }}
+                      />
+                    </View>
+                  )}
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 }}>
+                    <TouchableOpacity onPress={() => removeQuestion(qIdx)} style={{ backgroundColor: '#f44336', padding: 8, borderRadius: 6 }}>
+                      <Text style={{ color: '#fff' }}>Remove</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={addQuestion} style={{ backgroundColor: '#1976d2', padding: 8, borderRadius: 6 }}>
+                      <Text style={{ color: '#fff' }}>Add Question</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
+              {questions.length === 0 && (
+                <View style={{ alignItems: 'center', marginVertical: 20 }}>
+                  <TouchableOpacity onPress={addQuestion} style={{ backgroundColor: '#1976d2', padding: 12, borderRadius: 8 }}>
+                    <Text style={{ color: '#fff', fontWeight: 'bold' }}>Add Question</Text>
+                  </TouchableOpacity>
+                </View>
               )}
             </View>
             <View style={{ paddingBottom: 30, paddingHorizontal: 10, backgroundColor: '#fff' }}>
@@ -880,6 +1410,52 @@ const styles = StyleSheet.create({
     borderColor: '#e0e0e0',
     borderRadius: 8,
     overflow: 'hidden',
+  },
+  suggestionContainer: {
+    position: 'absolute',
+    top: '100%',
+    left: 0,
+    right: 0,
+    backgroundColor: 'white',
+    borderRadius: 8,
+    elevation: 4,
+    zIndex: 1000,
+    maxHeight: 200,
+    marginTop: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  scrollableBox: {
+    flex: 1,
+    paddingHorizontal: 8,
+  },
+  suggestionItem: {
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  questionText: {
+    fontSize: 14,
+    color: '#333',
+    marginBottom: 4,
+  },
+  tagText: {
+    color: '#666',
+    fontSize: 12,
+    marginTop: 4,
+  },
+  tagDropdownContainer: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    borderRadius: 10,
+    backgroundColor: '#fff',
+    maxHeight: 200,
+    overflow: 'hidden',
+    elevation: 2,
+    zIndex: 999,
   },
 });
 
