@@ -21,6 +21,15 @@ import NextScreen from './src/screens/nextscreen';
 import LanguageScreen from './src/screens/LanguageScreen';
 import StudentDashboard from './src/screens/StudentDashboard';
 import AdminDashboard from './src/screens/AdminDashboard';
+import CreateExam from './src/screens/CreateExam';
+import ManageExams from './src/screens/ManageExams';
+import ManageStudents from './src/screens/ManageStudents';
+import ResultsAnalytics from './src/screens/ResultsAnalytics';
+import AdminProfile from './src/screens/AdminProfile';
+import ExamAttemptScreen from './src/screens/ExamAttemptScreen';
+import AssignExam from './src/screens/AssignExam';
+import ManageQuestions from './src/screens/ManageQuestions';
+import EditExam from './src/screens/EditExam';
 
 const Stack = createStackNavigator();
 
@@ -99,6 +108,11 @@ const StudentStackScreens = () => (
         title: 'Profile',
       }}
     />
+    <Stack.Screen
+      name="ExamAttemptScreen"
+      component={ExamAttemptScreen}
+      options={{ headerShown: false }}
+    />
   </>
 );
 
@@ -152,6 +166,31 @@ const AuthStackScreens = () => (
   </>
 );
 
+const defaultQuestion = {
+  text: '',
+  options: [
+    { text: '', image: null },
+    { text: '', image: null },
+    { text: '', image: null },
+    { text: '', image: null }
+  ],
+  correctAnswers: [],
+  image: null,
+  type: 'mcq',
+  marks: 1,
+  difficulty: 'easy',
+  tags: ''
+};
+
+const defaultExamData = {
+  title: '',
+  description: '',
+  duration: '',
+  totalMarks: '',
+  passingMarks: '',
+  status: 'scheduled',
+};
+
 const AppNavigator = () => {
   const { isLoading, user } = useContext(AppwriteContext);
 
@@ -167,98 +206,35 @@ const AppNavigator = () => {
   const userRole = user?.preferences?.role;
   
   // For initial screen determination
-  let initialScreen = "Splash";
+  let initialScreen = "CandidateLogin";
   if (user) {
     if (userRole === 'admin') initialScreen = "AdminDashboard";
     else if (userRole === 'student') initialScreen = "StudentDashboard";
   }
 
   return (
-    <Stack.Navigator initialRouteName={initialScreen}>
-      {/* Always include all screens, but let the initialRouteName control where we start */}
-      <Stack.Screen
-        name="AdminDashboard"
-        component={AdminDashboard}
-        options={{ headerShown: false }}
-      />
-      
-      <Stack.Screen
-        name="StudentDashboard"
-        component={StudentDashboard}
-        options={{ headerShown: false }}
-      />
-      
-      <Stack.Screen
-        name="Home"
-        component={Home}
-        options={{
-          ...headerOptions,
-          title: 'Home',
-        }}
-      />
-      
-      <Stack.Screen
-        name="Profile"
-        component={NextScreen}
-        options={{
-          ...headerOptions,
-          title: 'Profile',
-        }}
-      />
-      
-      <Stack.Screen
-        name="Splash"
-        component={SplashScreen}
-        options={{ headerShown: false }}
-      />
-      
-      <Stack.Screen
-        name="Welcome"
-        component={WelcomeScreen}
-        options={{ headerShown: false }}
-      />
-      
-      <Stack.Screen
-        name="Language"
-        component={LanguageScreen}
-        options={{ headerShown: false }}
-      />
-      
-      <Stack.Screen
-        name="GetStarted"
-        component={GetStarted}
-        options={{ headerShown: false }}
-      />
-      
-      <Stack.Screen
-        name="CandidateLogin"
-        component={CandidateLoginScreen}
-        options={{ headerShown: false }}
-      />
-      
-      <Stack.Screen
-        name="CandidateSignup"
-        component={CandidateSignup}
-        options={{ headerShown: false }}
-      />
-      
-      <Stack.Screen
-        name="CandidateOtpVerification"
-        component={CandidateOtpVerification}
-        options={{ headerShown: false }}
-      />
-      
-      <Stack.Screen
-        name="ForgotPassword"
-        component={ForgotPassword}
-        options={{ headerShown: false }}
-      />
-      
-      <Stack.Screen
-        name="ControllerLogin"
-        component={ControllerLogin}
-        options={{ headerShown: false }}
-      />
+    <Stack.Navigator
+      screenOptions={{
+        headerShown: false
+      }}
+      initialRouteName={initialScreen}
+    >
+      <Stack.Screen name="Splash" component={SplashScreen} />
+      <Stack.Screen name="Welcome" component={WelcomeScreen} />
+      <Stack.Screen name="Language" component={LanguageScreen} />
+      <Stack.Screen name="GetStarted" component={GetStarted} />
+      <Stack.Screen name="CandidateLogin" component={CandidateLoginScreen} />
+      <Stack.Screen name="CandidateSignup" component={CandidateSignup} />
+      <Stack.Screen name="AdminDashboard" component={AdminDashboard} />
+      <Stack.Screen name="StudentDashboard" component={StudentDashboard} />
+      <Stack.Screen name="ExamAttemptScreen" component={ExamAttemptScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="ManageQuestions" component={ManageQuestions} />
+      <Stack.Screen name="CreateExam" component={CreateExam} />
+      <Stack.Screen name="ManageExams" component={ManageExams} />
+      <Stack.Screen name="EditExam" component={EditExam} />
+      <Stack.Screen name="ManageStudents" component={ManageStudents} />
+      <Stack.Screen name="ResultsAnalytics" component={ResultsAnalytics} />
+      <Stack.Screen name="AdminProfile" component={AdminProfile} />
     </Stack.Navigator>
   );
 };
