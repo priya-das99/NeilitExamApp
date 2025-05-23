@@ -22,15 +22,17 @@ import { databases, appwriteConfig } from '../utils/appwriteConfig';
 import { Query } from 'appwrite';
 import ColorPickerModal from './ColorPickerModal';
 import LinearGradient from 'react-native-linear-gradient';
+import theme from '../styles/theme';
+import MainLayout from '../components/MainLayout';
 
-const StudentDashboard = ({ themeColor = '#003399', onThemeColorChange }) => {
+const StudentDashboard = ({ onThemeColorChange }) => {
   const { user, handleLogout } = useAppwrite();
   const navigation = useNavigation();
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState(null);
   const [showColorPicker, setShowColorPicker] = useState(false);
-  const [selectedColor, setSelectedColor] = useState(themeColor);
+  const [selectedColor, setSelectedColor] = useState('#003399');
   const [showGuidelines, setShowGuidelines] = useState(false);
   const [selectedExam, setSelectedExam] = useState(null);
   const [timeRemaining, setTimeRemaining] = useState(0);
@@ -38,6 +40,9 @@ const StudentDashboard = ({ themeColor = '#003399', onThemeColorChange }) => {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(0.9)).current;
   const [exams, setExams] = useState([]);
+  const [studentId, setStudentId] = useState(null);
+  const [student, setStudent] = useState(null);
+  const [studentLoading, setStudentLoading] = useState(true);
 
   // Exam Instructions Modal State
   const [showInstructions, setShowInstructions] = useState(false);
@@ -47,75 +52,68 @@ const StudentDashboard = ({ themeColor = '#003399', onThemeColorChange }) => {
   const fetchExams = useCallback(async () => {
     try {
       setErrorMessage(null);
-      const response = await databases.listDocuments(
+      // 1. Fetch all exams
+      const examsRes = await databases.listDocuments(
         appwriteConfig.databaseId,
         appwriteConfig.examsCollectionId,
-        [
-          Query.orderDesc('createdAt'),
-          Query.limit(100)
-        ]
+        [Query.orderDesc('createdAt'), Query.limit(100)]
       );
-
-      console.log('Raw exam data:', response.documents);
-
+      // 2. Fetch assignments for the current student
+      let assignments = [];
+      if (studentId) {
+        const assignmentsRes = await databases.listDocuments(
+          appwriteConfig.databaseId,
+          appwriteConfig.examAssignmentsCollectionId,
+          [Query.equal('studentId', studentId)]
+        );
+        assignments = assignmentsRes.documents;
+      }
+      // 3. Attach subjectName, banner, and assignment info to each exam
       const examsWithDetails = await Promise.all(
-        response.documents.map(async (exam) => {
-          console.log('Processing exam:', exam.$id, 'SubjectId:', exam.subjectId);
-          
+        examsRes.documents.map(async (exam) => {
           let subjectName = 'Unknown Subject';
-          
           if (exam.subjectId) {
             try {
-              console.log('Attempting to fetch subject with ID:', exam.subjectId);
-              
               const subjectResponse = await databases.getDocument(
                 appwriteConfig.databaseId,
                 appwriteConfig.subjectsCollectionId,
                 exam.subjectId
               );
-              
-              console.log('Subject response:', subjectResponse);
-              
               if (subjectResponse && subjectResponse.subjectName) {
                 subjectName = subjectResponse.subjectName;
-                console.log('Found subject name:', subjectName);
-              } else {
-                console.log('Subject response missing subjectName property');
               }
-            } catch (error) {
-              console.error('Error fetching subject:', error.message);
-              console.error('Error details:', {
-                examId: exam.$id,
-                subjectId: exam.subjectId,
-                error: error
-              });
-            }
-          } else {
-            console.log('No subjectId found for exam:', exam.$id);
+            } catch (error) {}
           }
-
-          const examWithDetails = {
+          // Find assignment for this exam and student
+          const assignment = assignments.find(a => a.examId === exam.$id);
+          return {
             ...exam,
             subjectName,
             banner: require('../../assets/images/getbg.jpg'),
-            isLive: false
+            assignment // may be undefined if not assigned
           };
-          
-          console.log('Final exam details:', examWithDetails);
-          return examWithDetails;
         })
       );
-
-      console.log('All processed exams:', examsWithDetails);
-      setExams(examsWithDetails);
+      // Filter to only show the next scheduled or live exam (not over)
+      const now = new Date();
+      const notOverExams = examsWithDetails.filter(exam => {
+        if (!exam.assignment) return false;
+        if (!exam.startTime || !exam.duration) return false;
+        const start = new Date(exam.startTime);
+        const end = new Date(start.getTime() + exam.duration * 60000);
+        return now < end;
+      });
+      // Sort by start time ascending
+      notOverExams.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+      // Only show the next one (if any)
+      setExams(notOverExams.length > 0 ? [notOverExams[0]] : []);
     } catch (error) {
-      console.error('Error in fetchExams:', error.message);
       setErrorMessage('Failed to fetch exams. Please try again.');
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, []);
+  }, [studentId]);
 
   const onRefresh = useCallback(() => {
     setIsRefreshing(true);
@@ -232,35 +230,11 @@ const StudentDashboard = ({ themeColor = '#003399', onThemeColorChange }) => {
     });
   };
 
-  // Logout handler (clear session and reset navigation)
-  const handleLogoutPress = () => {
-    Alert.alert(
-      'Logout',
-      'Are you sure you want to logout?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Logout',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await handleLogout();
-            } catch (error) {
-              Alert.alert('Logout Failed', error.message || 'Failed to logout.');
-            } finally {
-              navigation.reset({ index: 0, routes: [{ name: 'CandidateLogin' }] });
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  const ExamCard = ({ item, selectedColor }) => {
+  const ExamCard = ({ item }) => {
     const [isLive, setIsLive] = useState(false);
-
+    const assignment = item.assignment;
     useEffect(() => {
-      if (item.startTime && item.duration) {
+      if (assignment && item.startTime && item.duration) {
         const start = new Date(item.startTime);
         const end = new Date(start.getTime() + item.duration * 60000); // duration in minutes
         const now = new Date();
@@ -273,78 +247,143 @@ const StudentDashboard = ({ themeColor = '#003399', onThemeColorChange }) => {
       } else {
         setIsLive(false);
       }
-    }, [item.startTime, item.duration]);
-
-    // If no exam is scheduled or exam is over
-    if (!item.startTime || !isLive) {
+    }, [assignment, item.startTime, item.duration]);
+    // If not assigned, show 'No exam scheduled' card
+    if (!assignment) {
       return (
         <View style={[styles.examCard, styles.shadow]}>
-          <Image source={item.banner} style={styles.examBanner} resizeMode="cover" />
+          <Image
+            source={require('../../assets/images/getbg.jpg')}
+            style={styles.examBanner}
+            resizeMode="cover"
+          />
+          <View style={styles.examContentNew}>
+            <View style={styles.noExamContainer}>
+              <Image
+                source={require('../../assets/images/logo.png')}
+                style={styles.logoImageNew}
+              />
+              <Text style={styles.noExamText}>No exam scheduled</Text>
+              <View style={{ flex: 1 }} />
+              <TouchableOpacity
+                style={[styles.goToExamButtonNew, { backgroundColor: '#cccccc' }]}
+                disabled={true}
+              >
+                <Text style={styles.goToExamTextNew}>Go to Exam</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      );
+    }
+    // Determine exam status
+    const now = new Date();
+    const start = item.startTime ? new Date(item.startTime) : null;
+    const end = (start && item.duration) ? new Date(start.getTime() + item.duration * 60000) : null;
+    const isUpcoming = start && now < start;
+    const isPast = end && now >= end;
+
+    if (isPast) {
+      // Exam is over
+      return (
+        <View style={[styles.examCard, styles.shadow]}>
+          <Image
+            source={require('../../assets/images/getbg.jpg')}
+            style={styles.examBanner}
+            resizeMode="cover"
+          />
           <View style={styles.examContentNew}>
             <View style={styles.noExamContainer}>
               <Image 
                 source={require('../../assets/images/logo.png')} 
                 style={styles.logoImageNew} 
               />
-              <Text style={styles.noExamText}>
-                {!item.startTime ? 'No exam scheduled' : 'Exam is over'}
-              </Text>
+              <Text style={styles.noExamText}>Exam is over</Text>
+              <TouchableOpacity
+                style={[styles.goToExamButtonNew, { backgroundColor: '#cccccc' }]}
+                disabled={true}
+              >
+                <Text style={styles.goToExamTextNew}>Go to Exam</Text>
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity
-              style={[styles.goToExamButtonNew, { backgroundColor: '#cccccc' }]}
-              disabled={true}
-            >
-              <Text style={styles.goToExamTextNew}>
-                Go to Exam
-              </Text>
-            </TouchableOpacity>
           </View>
         </View>
       );
     }
 
-    // Live exam view
-    return (
-      <View style={[styles.examCard, styles.shadow]}>
-        <Image source={item.banner} style={styles.examBanner} resizeMode="cover" />
-        <View style={styles.examContentNew}>
-          <View style={styles.liveExamInfoContainer}>
-            <View style={styles.leftContent}>
-              <Image 
-                source={require('../../assets/images/logo.png')} 
-                style={styles.logoImageLive} 
-              />
-              <Text style={styles.subjectNameLive} numberOfLines={1}>
-                {item.subjectName}
-              </Text>
-            </View>
-            <View style={styles.rightContent}>
-              <Text style={styles.examTitleLive} numberOfLines={2}>
-                {item.title}
-              </Text>
-              <View style={[styles.statusBadgeLive, { backgroundColor: '#27ae60' }]}>
-                <Text style={styles.statusBadgeTextLive}>
-                  Live
+    if (isLive) {
+      // Exam is live (10 min before start until end)
+      return (
+        <View style={[styles.examCard, styles.shadow]}>
+          <Image
+            source={require('../../assets/images/getbg.jpg')}
+            style={styles.examBanner}
+            resizeMode="cover"
+          />
+          <View style={styles.examContentNew}>
+            <View style={styles.liveExamInfoContainer}>
+              <View style={styles.leftContent}>
+                <Image 
+                  source={require('../../assets/images/logo.png')} 
+                  style={styles.logoImageLive} 
+                />
+                <Text style={styles.subjectNameLive} numberOfLines={1}>
+                  {item.subjectName}
                 </Text>
               </View>
+              <View style={styles.rightContent}>
+                <Text style={styles.examTitleLive} numberOfLines={2}>
+                  {item.title}
+                </Text>
+                <View style={[styles.statusBadgeLive, { backgroundColor: '#27ae60' }]}>
+                  <Text style={styles.statusBadgeTextLive}>
+                    Live
+                  </Text>
+                </View>
+              </View>
+            </View>
+            <View style={styles.bottomSection}>
+              <Text style={styles.examDateText}>
+                {start.toLocaleDateString('en-US', {
+                  day: 'numeric',
+                  month: 'short',
+                  year: 'numeric'
+                })}
+              </Text>
+              <TouchableOpacity
+                style={[styles.goToExamButtonNew, { backgroundColor: selectedColor }]}
+                onPress={() => handleExamClick(item)}
+              >
+                <Text style={styles.goToExamTextNew}>
+                  Go to Exam
+                </Text>
+              </TouchableOpacity>
             </View>
           </View>
+        </View>
+      );
+    }
 
-          <View style={styles.bottomSection}>
-            <Text style={styles.examDateText}>
-              {new Date(item.startTime).toLocaleDateString('en-US', {
-                day: 'numeric',
-                month: 'short',
-                year: 'numeric'
-              })}
-            </Text>
+    // Not live yet (scheduled exam)
+    return (
+      <View style={[styles.examCard, styles.shadow]}>
+        <Image
+          source={require('../../assets/images/getbg.jpg')}
+          style={styles.examBanner}
+          resizeMode="cover"
+        />
+        <View style={styles.examContentNew}>
+          <View style={styles.noExamContainer}>
+            <Image 
+              source={require('../../assets/images/logo.png')} 
+              style={styles.logoImageNew} 
+            />
+            <Text style={styles.noExamText}>Exam will be live soon</Text>
             <TouchableOpacity
-              style={[styles.goToExamButtonNew, { backgroundColor: selectedColor }]}
-              onPress={() => handleExamClick(item)}
+              style={[styles.goToExamButtonNew, { backgroundColor: '#cccccc' }]}
+              disabled={true}
             >
-              <Text style={styles.goToExamTextNew}>
-                Go to Exam
-              </Text>
+              <Text style={styles.goToExamTextNew}>Go to Exam</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -356,13 +395,34 @@ const StudentDashboard = ({ themeColor = '#003399', onThemeColorChange }) => {
   const renderExamCard = useCallback(({ item }) => (
     <ExamCard 
       item={item} 
-      selectedColor={selectedColor} 
     />
-  ), [selectedColor]);
+  ), []);
+
+  // Add UpcomingExamsCard component
+  const UpcomingExamsCard = () => (
+    <View style={[styles.examCard, styles.shadow, { minHeight: 315 }]}>
+      <Image source={require('../../assets/images/jee-banner.jpg')} style={styles.examBanner} resizeMode="cover" />
+      <View style={styles.examContentNew}>
+        <View style={styles.noExamContainer}>
+          <Image 
+            source={require('../../assets/images/up.png')} 
+            style={[styles.logoImageNew, { alignSelf: 'flex-end', marginRight: 25, marginTop: 20,  }]} 
+          />
+        </View>
+        <View style={{ flex: 1, justifyContent: 'flex-end', width: '100%' }}>
+          <TouchableOpacity
+            style={[styles.goToExamButtonNew, { backgroundColor: '#003399', marginBottom: 20, marginTop: 20 }]}
+            onPress={() => navigation.navigate('UpcomingExams')}
+          >
+            <Text style={styles.goToExamTextNew}>Upcoming Exams</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </View>
+  );
 
   const bottomNavRoutes = [
-    { name: 'home', label: 'Home', route: 'DrawerMain', isActive: true },
-    { name: 'leaderboard', label: 'Rank', route: 'Rank', isActive: false },
+    { name: 'home', label: 'Home', route: 'StudentStack', isActive: true },
     { name: 'school', label: 'Result', route: 'Result', isActive: false },
     { name: 'person', label: 'Profile', route: 'CandidateProfile', isActive: false },
   ];
@@ -461,147 +521,171 @@ const StudentDashboard = ({ themeColor = '#003399', onThemeColorChange }) => {
     </Modal>
   );
 
+  // Fetch studentId from students collection using email (if not already present)
+  useEffect(() => {
+    const fetchStudentId = async () => {
+      if (!user || !user.email) return;
+      try {
+        const res = await databases.listDocuments(
+          appwriteConfig.databaseId,
+          appwriteConfig.studentsCollectionId,
+          [Query.equal('email', user.email)]
+        );
+        if (res.documents.length > 0) {
+          setStudentId(res.documents[0].studentId);
+        }
+      } catch (err) {
+        console.error('Error fetching studentId:', err);
+      }
+    };
+    fetchStudentId();
+  }, [user]);
+
+  useEffect(() => {
+    const fetchStudent = async () => {
+      if (!user || !user.email) return;
+      try {
+        const res = await databases.listDocuments(
+          appwriteConfig.databaseId,
+          appwriteConfig.studentsCollectionId,
+          [Query.equal('email', user.email)]
+        );
+        if (res.documents.length > 0) {
+          setStudent(res.documents[0]);
+        }
+      } catch (err) {
+        setStudent(null);
+      } finally {
+        setStudentLoading(false);
+      }
+    };
+    fetchStudent();
+  }, [user]);
+
   return (
-    <SafeAreaView style={[styles.safeArea, { backgroundColor: selectedColor }]}>
-      <StatusBar 
-        barStyle="light-content" 
-        backgroundColor={selectedColor} 
-        translucent={true}
-      />
-      <Animated.View style={[styles.container, { opacity: fadeAnim, transform: [{ scale: scaleAnim }] }]}>
-        <View style={[styles.topNav, { backgroundColor: selectedColor }]}>
-          <TouchableOpacity 
-            onPress={handleOpenDrawer}
-            style={styles.iconButton}
-          >
-            <Icon name="menu" size={24} color="#ffffff" />
-          </TouchableOpacity>
-          <Text style={styles.screenTitle}>Home</Text>
-          <View style={styles.topNavIcons}>
-            <TouchableOpacity 
-              onPress={() => navigation.navigate('Notifications')}
-              style={styles.iconButton}
-            >
-              <Icon name="notifications" size={24} color="#ffffff" />
-            </TouchableOpacity>
-            <TouchableOpacity 
-              onPress={() => setShowColorPicker(true)}
-              style={styles.iconButton}
-            >
-              <Icon name="palette" size={24} color="#ffffff" />
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={handleLogoutPress}
-              style={styles.iconButton}
-            >
-              <Icon name="logout" size={24} color="#ffffff" />
-            </TouchableOpacity>
-          </View>
-        </View>
-        
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          refreshControl={
-            <RefreshControl 
-              refreshing={isRefreshing} 
-              onRefresh={onRefresh} 
-              colors={[selectedColor]} 
-              tintColor={selectedColor} 
-            />
-          }
-        >
-          <View style={[styles.userInfo, { backgroundColor: selectedColor }]}>
-            <Image 
-              source={require('../../assets/images/user.png')} 
-              style={styles.userAvatar} 
-              resizeMode="cover" 
-            />
-            <Text style={styles.goodMorningText}>Good morning, {user?.name || 'Student'}</Text>
-            <Text style={styles.userMessage}>Let's ace your exams!</Text>
-          </View>
-          
-          <View style={styles.content}>
-            <View style={styles.searchBarContainer}>
-              <View style={styles.searchBar}>
-                <Icon name="search" size={24} color="#999999" />
-                <TextInput 
-                  style={styles.searchInput} 
-                  placeholder="Search..." 
-                  placeholderTextColor="#999999" 
-                />
+    <MainLayout>
+      <SafeAreaView style={[styles.safeArea, { backgroundColor: selectedColor }]}>
+        <StatusBar 
+          barStyle="light-content" 
+          backgroundColor={selectedColor} 
+          translucent={true}
+        />
+        <Animated.View style={[styles.container, { opacity: fadeAnim, transform: [{ scale: scaleAnim }] }]}>
+          <View style={[styles.topNav, { backgroundColor: selectedColor }]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+              <TouchableOpacity 
+                onPress={handleOpenDrawer}
+                style={[styles.iconButton, { marginLeft: -8 }]}
+              >
+                <Icon name="menu" size={24} color="#ffffff" />
+              </TouchableOpacity>
+              <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', marginLeft: 24 }}>
+                <Text style={styles.screenTitle}>Home</Text>
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <TouchableOpacity 
+                  onPress={() => navigation.navigate('Notifications')}
+                  style={styles.iconButton}
+                >
+                  <Icon name="notifications" size={24} color="#ffffff" />
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  onPress={() => setShowColorPicker(true)}
+                  style={styles.iconButton}
+                >
+                  <Icon name="palette" size={24} color="#ffffff" />
+                </TouchableOpacity>
               </View>
             </View>
-            
-            {errorMessage && (
-              <View style={styles.errorContainer}>
-                <Text style={styles.errorText}>{errorMessage}</Text>
-              </View>
-            )}
-            
-            {isLoading ? (
-              <View style={styles.loadingContainer}>
-                <ActivityIndicator size="large" color={selectedColor} />
-                <Text style={styles.loadingText}>Loading exams...</Text>
-              </View>
-            ) : (
-              <View style={styles.examListContainer}>
-                {exams.length === 0 ? (
-                   <View style={[styles.examCard, styles.shadow, { justifyContent: 'center', alignItems: 'center' }]}>
-                     {/* Display a message when no exams are available, keeping card structure */}
-                     <Text style={{ color: '#888', fontWeight: 'bold', textAlign: 'center', marginVertical: 10 }}>
-                       No exams available at the moment.
-                     </Text>
-                     {/* You might still want a disabled button or remove it based on exact requirement for no exams */}
-                     <TouchableOpacity
-                       style={[styles.goToExamButtonNew, { backgroundColor: '#cccccc' }]}
-                       disabled={true}
-                     >
-                       <Text style={styles.goToExamTextNew}>Go to Exam</Text>
-                     </TouchableOpacity>
-                   </View>
-                ) : (
-                  // Map over exams array to render ExamCard for each exam
-                  exams.map((exam) => (
-                    <View key={exam.examId} style={styles.examCardWrapper}>
-                      {renderExamCard({ item: exam })}
-                    </View>
-                  ))
-                )}
-              </View>
-            )}
           </View>
-        </ScrollView>
-        
-        <View style={styles.bottomNav}>
-          {bottomNavRoutes.map((navItem) => (
-            <TouchableOpacity
-              key={navItem.route}
-              style={styles.navItem}
-              onPress={() => navigation.navigate(navItem.route)}
-            >
-              <Icon 
-                name={navItem.name} 
-                size={28} 
-                color={navItem.isActive ? selectedColor : '#666666'} 
+          
+          <ScrollView
+            contentContainerStyle={styles.scrollContent}
+            refreshControl={
+              <RefreshControl 
+                refreshing={isRefreshing} 
+                onRefresh={onRefresh} 
+                colors={[selectedColor]} 
+                tintColor={selectedColor} 
               />
-              <Text style={[styles.navText, { color: navItem.isActive ? selectedColor : '#666666' }]}>
-                {navItem.label}
+            }
+          >
+            <View style={[styles.userInfo, { backgroundColor: selectedColor }]}>
+              <Image
+                source={
+                  student && student.profileImage
+                    ? { uri: student.profileImage }
+                    : require('../../assets/images/user.png')
+                }
+                style={styles.userAvatar}
+                resizeMode="cover"
+              />
+              <Text style={styles.goodMorningText}>
+                Good morning, {studentLoading ? '...' : student?.name || 'Student'}
               </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </Animated.View>
+              <Text style={styles.userMessage}>
+                {studentLoading ? '' : student?.email || ''}
+              </Text>
+            </View>
+            
+            <View style={styles.content}>
+              <View style={styles.searchBarContainer}>
+                <View style={styles.searchBar}>
+                  <Icon name="search" size={24} color="#999999" />
+                  <TextInput 
+                    style={styles.searchInput} 
+                    placeholder="Search..." 
+                    placeholderTextColor="#999999" 
+                  />
+                </View>
+              </View>
+              
+              {errorMessage && (
+                <View style={styles.errorContainer}>
+                  <Text style={styles.errorText}>{errorMessage}</Text>
+                </View>
+              )}
+              
+              {isLoading ? (
+                <View style={styles.loadingContainer}>
+                  <ActivityIndicator size="large" color={selectedColor} />
+                  <Text style={styles.loadingText}>Loading exams...</Text>
+                </View>
+              ) : (
+                <View style={styles.examListContainer}>
+                  <>
+                    {exams.length === 0 ? (
+                      <View style={styles.examCardWrapper}>
+                        <ExamCard item={{}} />
+                      </View>
+                    ) : (
+                      exams.map((exam) => (
+                        <View key={exam.examId} style={styles.examCardWrapper}>
+                          {renderExamCard({ item: exam })}
+                        </View>
+                      ))
+                    )}
+                    <View style={styles.examCardWrapper}>
+                      <UpcomingExamsCard />
+                    </View>
+                  </>
+                </View>
+              )}
+            </View>
+          </ScrollView>
+        </Animated.View>
 
-      <ColorPickerModal
-        visible={showColorPicker}
-        onClose={() => setShowColorPicker(false)}
-        onSelectColor={handleColorSelect}
-        currentColor={selectedColor}
-      />
+        <ColorPickerModal
+          visible={showColorPicker}
+          onClose={() => setShowColorPicker(false)}
+          onSelectColor={handleColorSelect}
+          currentColor={selectedColor}
+        />
 
-      {renderGuidelinesModal()}
-      {renderInstructionsModal()}
-    </SafeAreaView>
+        {renderGuidelinesModal()}
+        {renderInstructionsModal()}
+      </SafeAreaView>
+    </MainLayout>
   );
 };
 
@@ -618,11 +702,11 @@ const styles = StyleSheet.create({
   },
   topNav: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 15,
     paddingTop: 40,
+    position: 'relative',
   },
   screenTitle: {
     fontSize: 22,
@@ -729,7 +813,6 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   examCard: {
-    flex: 1,
     backgroundColor: '#ffffff',
     borderRadius: 18,
     overflow: 'hidden',
@@ -790,7 +873,7 @@ const styles = StyleSheet.create({
     resizeMode: 'contain',
   },
   logoImageNew: {
-    width: 45,
+    width: 100,
     height: 45,
     borderRadius: 22.5,
     marginBottom: 8,
@@ -800,8 +883,8 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
     color: '#222',
-    marginBottom: 8, // Space between title and status/message
-    textAlign: 'right', // Align text to the right
+    marginBottom: 8,
+    textAlign: 'right',
     flexWrap: 'wrap',
   },
   subjectNameLive: {
@@ -828,7 +911,7 @@ const styles = StyleSheet.create({
     color: '#888',
     fontWeight: 'bold',
     fontSize: 14,
-    textAlign: 'right', // Align text to the right
+    textAlign: 'right',
   },
   bottomSection: {
     marginTop: 'auto',
@@ -851,45 +934,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#fff',
     fontWeight: 'bold',
-  },
-  bottomNav: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingVertical: 15,
-    backgroundColor: '#ffffff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 5,
-  },
-  navItem: {
-    alignItems: 'center',
-    paddingVertical: 8,
-  },
-  navText: {
-    fontSize: 14,
-    marginTop: 4,
-    fontWeight: '600',
-  },
-  examBanner: {
-    width: '100%',
-    height: 100,
-  },
-  noExamContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 20,
-  },
-  noExamText: {
-    fontSize: 16,
-    color: '#666',
-    textAlign: 'center',
-    marginTop: 10,
-    fontWeight: '500',
   },
   modalOverlay: {
     flex: 1,
@@ -990,6 +1034,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
     color: '#fff',
+  },
+  examBanner: {
+    width: '100%',
+    height: 130,
+    resizeMode: 'cover',
   },
 });
 
