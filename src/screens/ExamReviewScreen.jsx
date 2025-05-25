@@ -15,22 +15,30 @@ const ExamReviewScreen = ({ route, navigation }) => {
   const [studentResult, setStudentResult] = useState(null);
   const [loadingResult, setLoadingResult] = useState(false);
 
-  // Utility function to parse compact answers
-  const parseCompactAnswers = (compactAnswers) => {
-    if (!compactAnswers) return {};
-    
-    const answersObj = {};
-    const pairs = compactAnswers.split(';');
-    
-    pairs.forEach(pair => {
-      const [qId, ans] = pair.split(':');
-      if (qId && ans) {
-        // If answer contains commas, it's an MSQ answer
-        answersObj[qId] = ans.includes(',') ? ans.split(',') : ans;
+  // Utility function to calculate exam score
+  const calculateExamScore = (score = 0, totalMarks = 0) => {
+    const percentage = totalMarks ? Math.round((score / totalMarks) * 100) : 0;
+    return {
+      score,
+      percentage,
+      status: percentage >= 30 ? 'pass' : 'fail'
+    };
+  };
+
+  // Add utility function to format answers
+  const formatAnswersString = (answersStr) => {
+    if (!answersStr) return '';
+    // Take only the first few answer pairs to fit within 45 chars
+    const pairs = answersStr.split(';');
+    let formattedStr = '';
+    for (const pair of pairs) {
+      if ((formattedStr + pair + ';').length <= 44) { // 44 to leave room for last semicolon
+        formattedStr += pair + ';';
+      } else {
+        break;
       }
-    });
-    
-    return answersObj;
+    }
+    return formattedStr.slice(0, 45); // Ensure it's within 45 chars
   };
 
   useEffect(() => {
@@ -75,109 +83,79 @@ const ExamReviewScreen = ({ route, navigation }) => {
   const handleGenerateResult = async () => {
     setGenerating(true);
     try {
-      // 1. Fetch all question mappings for this exam
-      const examQuestionsRes = await databases.listDocuments(
+      // Fetch assignments from exam_assignment collection
+      const assignmentQuery = await databases.listDocuments(
         appwriteConfig.databaseId,
-        appwriteConfig.examQuestionsCollectionId,
-        [Query.equal('examId', exam.examId)]
+        appwriteConfig.examAssignmentsCollectionId,
+        [
+          Query.equal('examId', exam.examId),
+          Query.equal('status', 'completed')
+        ]
       );
-      const questionMappings = examQuestionsRes.documents || [];
-      const questionIds = questionMappings.map(q => q.questionId);
 
-      // 2. Fetch all question details
-      const questionsRes = await databases.listDocuments(
-        appwriteConfig.databaseId,
-        appwriteConfig.questionsCollectionId,
-        [Query.equal('questionId', questionIds)]
-      );
-      const questions = questionsRes.documents || [];
-
-      // 3. For each student, calculate result and store in 'results'
-      for (const student of exam.students) {
-        // Parse answers
-        let answersObj = parseCompactAnswers(student.answers);
-
-        let score = 0;
-        let attemptedQuestions = 0;
-        const totalQuestions = questionMappings.length;
-        const totalMarks = exam.totalMarks || 0;
-
-        // Calculate score and attempted questions
-        for (const q of questions) {
-          const studentAns = answersObj[q.questionId];
-          if (studentAns !== undefined && studentAns !== null && studentAns !== '') {
-            attemptedQuestions++;
-            if (q.type === 'mcq') {
-              // MCQ: correctAnswers is an array of indices or optionIds
-              const correct = Array.isArray(q.correctAnswers) ? q.correctAnswers[0] : q.correctAnswers;
-              if (studentAns === correct) {
-                score += Number(q.marks) || 1;
-              }
-            } else if (q.type === 'msq') {
-              // MSQ: partial marking
-              const correctSet = new Set(q.correctAnswers);
-              const studentSet = new Set(Array.isArray(studentAns) ? studentAns : [studentAns]);
-              const correctSelected = [...studentSet].filter(x => correctSet.has(x)).length;
-              const marksPerOption = (Number(q.marks) || 1) / correctSet.size;
-              score += marksPerOption * correctSelected;
-            }
-          }
-        }
-
-        // Calculate percentage and pass/fail status
-        const percentage = totalMarks > 0 ? Math.round((score / totalMarks) * 100) : 0;
-        const isPassed = percentage >= 30; // 30% is the passing threshold
-        const status = isPassed ? 'pass' : 'fail';
-
-        console.log('Score Calculation:', {
-          score,
-          totalMarks,
-          percentage,
-          isPassed,
-          status,
-          attemptedQuestions,
-          totalQuestions
-        });
-
-        // Create a compact version of answers (questionId:answer pairs)
-        const compactAnswers = Object.entries(answersObj)
-          .map(([qId, ans]) => `${qId}:${Array.isArray(ans) ? ans.join(',') : ans}`)
-          .join(';')
-          .slice(0, 45); // Ensure it doesn't exceed 45 chars
-
-        // Prepare result data
-        const resultData = {
-          examId: exam.examId,
-          studentId: student.studentId,
-          courseId: student.courseId || exam.courseId,
-          subjectId: exam.subjectId,
-          totalQuestions,
-          score: Math.round(score),
-          percentage,
-          timeTaken: student.timeTaken || 0,
-          startTime: student.startTime || '',
-          endTime: student.endTime || '',
-          status,
-          answers: compactAnswers,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-
-        // Log the data to check courseId
-        console.log('Result Data:', resultData);
-
-        // Create result document and get the generated ID
-        const resultResponse = await databases.createDocument(
-          appwriteConfig.databaseId,
-          'results',
-          'unique()',
-          resultData
-        );
-
-        const resultId = resultResponse.$id;
+      if (!assignmentQuery.documents.length) {
+        Alert.alert('No Data', 'No completed assignments found for this exam');
+        setGenerating(false);
+        return;
       }
 
-      Alert.alert('Success', 'Results generated for all students!');
+      let processedCount = 0;
+      let failedCount = 0;
+
+      for (const assignment of assignmentQuery.documents) {
+        try {
+          // Calculate result using the score from assignment
+          const { score, percentage, status } = calculateExamScore(
+            assignment.score || 0,
+            exam.totalMarks || 0
+          );
+
+          // Format answers string to fit within 45 chars
+          const formattedAnswers = formatAnswersString(assignment.answers);
+
+          // Create result document
+          const resultData = {
+            examId: exam.examId,
+            studentId: assignment.studentId,
+            courseId: assignment.courseId || exam.courseId,
+            subjectId: exam.subjectId,
+            totalQuestions: parseInt(assignment.totalQuestions || 0),
+            score,
+            percentage,
+            timeTaken: assignment.timeTaken || 0,
+            startTime: assignment.startTime || '',
+            endTime: assignment.endTime || '',
+            status,
+            answers: formattedAnswers, // Use formatted answers string
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+
+          await databases.createDocument(
+            appwriteConfig.databaseId,
+            'results',
+            'unique()',
+            resultData
+          );
+
+          processedCount++;
+        } catch (error) {
+          console.error('Error processing assignment:', {
+            assignmentId: assignment.$id,
+            error: error.message
+          });
+          failedCount++;
+        }
+      }
+
+      if (failedCount > 0) {
+        Alert.alert(
+          'Partial Success',
+          `Generated ${processedCount} results. Failed to generate ${failedCount} results.`
+        );
+      } else {
+        Alert.alert('Success', 'Results generated for all students!');
+      }
     } catch (error) {
       console.error('Error generating results:', error);
       Alert.alert('Error', 'Failed to generate results');
@@ -225,10 +203,7 @@ const ExamReviewScreen = ({ route, navigation }) => {
         ]
       );
       if (res.documents && res.documents.length > 0) {
-        const result = res.documents[0];
-        // Parse the compact answers back into a usable format
-        result.parsedAnswers = parseCompactAnswers(result.answers);
-        setStudentResult(result);
+        setStudentResult(res.documents[0]);
       } else {
         setStudentResult(null);
       }
