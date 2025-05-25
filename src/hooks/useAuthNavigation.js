@@ -12,7 +12,7 @@ export const useAuthNavigation = () => {
     } else if (role === 'student') {
       navigation.reset({
         index: 0,
-        routes: [{ name: 'DrawerMain' }],
+        routes: [{ name: 'StudentStack' }],
       });
     }
   };

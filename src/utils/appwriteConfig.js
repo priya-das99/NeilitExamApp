@@ -21,6 +21,7 @@ const appwriteConfig = {
     subjectsCollectionId: '680d06730031ebc56457',
     examQuestionsCollectionId: '681e4ca600017a3b9e84',
     examAssignmentsCollectionId: '680d1e10001b5a3229dc',
+    examAttemptsCollectionId: '681e4ca600017a3b9e85',
     adminRole: 'admin',
     studentRole: 'student',
     bucketId: '680f5c59001ad28a1efe'

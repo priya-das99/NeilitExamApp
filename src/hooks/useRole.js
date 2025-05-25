@@ -34,7 +34,7 @@ export const useRequireRole = (requiredRole) => {
         } else if (userRole === 'student') {
           navigation.reset({
             index: 0,
-            routes: [{ name: 'DrawerMain' }],
+            routes: [{ name: 'StudentStack' }],
           });
         }
         return;

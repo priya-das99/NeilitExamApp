@@ -418,6 +418,16 @@ const CreateExam = () => {
       // Student assignment is now optional; do nothing here
     }
 
+    // Validate that the sum of all question marks matches the total marks set for the exam
+    const totalQuestionMarks = questions.reduce((sum, q) => sum + (Number(q.marks) || 0), 0);
+    if (Number(examData.totalMarks) !== totalQuestionMarks) {
+      Alert.alert(
+        'Total Marks Mismatch',
+        `The sum of marks for all questions (${totalQuestionMarks}) does not match the total marks set for the exam (${examData.totalMarks}). Please adjust the marks.`
+      );
+      return;
+    }
+
     try {
       const startDateTime = new Date(startDate);
       startDateTime.setHours(startTime.getHours());

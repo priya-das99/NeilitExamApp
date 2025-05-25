@@ -556,6 +556,23 @@ const ManageExams = () => {
       const studentsToAdd = selectedAssignStudents
         .filter(id => !currentAssignments.documents.some(a => a.studentId === id));
 
+      // Reassign students: update studentId in existing assignments if needed
+      for (const assignment of currentAssignments.documents) {
+        // If the assignment's studentId is not in selectedAssignStudents, but the assignmentId is being reused for a new student
+        // (This logic assumes you have a way to map assignment to new studentId. Adjust as needed for your UI.)
+        // For now, if you want to reassign, you can update the studentId directly here.
+        // Example: if you have a mapping of assignmentId -> newStudentId, use that mapping here.
+        // This is a placeholder for actual reassignment logic:
+        // if (shouldReassign(assignment)) {
+        //   await databases.updateDocument(
+        //     appwriteConfig.databaseId,
+        //     appwriteConfig.examAssignmentsCollectionId,
+        //     assignment.$id,
+        //     { studentId: newStudentId }
+        //   );
+        // }
+      }
+
       // Remove unselected students
       for (const assignment of studentsToRemove) {
         await databases.deleteDocument(

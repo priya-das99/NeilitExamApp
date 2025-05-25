@@ -309,13 +309,28 @@ const ExamAttemptScreen = ({ route, navigation }) => {
 
   const calculateScore = (question, answer) => {
     if (!answer) return 0;
+    
     if (question.type === 'mcq') {
-      return answer === question.correctAnswers[0] ? question.marks : 0;
+      // For MCQ: Full marks if correct, zero if wrong
+      return question.correctAnswers.includes(answer) ? question.marks : 0;
     } else if (question.type === 'msq') {
-      const correctAnswers = question.correctAnswers;
-      const selectedAnswers = Array.isArray(answer) ? answer : [answer];
-      const correctCount = selectedAnswers.filter(a => correctAnswers.includes(a)).length;
-      return (correctCount / correctAnswers.length) * question.marks;
+      // For MSQ: Calculate based on correct options selected
+      const studentAnswerArray = Array.isArray(answer) ? answer : [answer];
+      const correctOptionsCount = question.correctAnswers.length;
+      
+      // Calculate marks per correct option
+      const marksPerCorrectOption = question.marks / correctOptionsCount;
+      
+      // Count how many correct options the student selected
+      const correctlySelectedCount = studentAnswerArray.filter(
+        answer => question.correctAnswers.includes(answer)
+      ).length;
+      
+      // Calculate marks for this question
+      const questionScore = correctlySelectedCount * marksPerCorrectOption;
+      
+      // Round to 1 decimal place
+      return Math.round(questionScore * 10) / 10;
     }
     return 0;
   };
@@ -323,10 +338,44 @@ const ExamAttemptScreen = ({ route, navigation }) => {
   const handleAutoSubmit = async () => {
     setIsSubmitting(true);
     try {
-      // Calculate total score
-      const totalScore = questions.reduce((score, question) => {
-        return score + calculateScore(question, answers[question.questionId]);
-      }, 0);
+      // Calculate total score and track attempted questions
+      let totalScore = 0;
+      let attemptedQuestions = 0;
+      let unattemptedQuestions = 0;
+
+      questions.forEach(question => {
+        const answer = answers[question.questionId];
+        if (answer !== undefined && answer !== null && answer !== '') {
+          attemptedQuestions++;
+          const questionScore = calculateScore(question, answer);
+          totalScore += questionScore;
+        } else {
+          unattemptedQuestions++;
+        }
+      });
+
+      // Round the score to integer as per collection structure
+      const finalScore = Math.round(totalScore);
+
+      // Format answers to be more compact
+      const formattedAnswers = Object.entries(answers).map(([questionId, answer]) => {
+        // For MCQ, store just the selected option index
+        // For MSQ, store array of selected option indices
+        return `${questionId}:${Array.isArray(answer) ? answer.join(',') : answer}`;
+      }).join(';');
+
+      // Prepare data according to exam_assignments collection structure
+      const resultData = {
+        assignmentId,
+        examId,
+        studentId,
+        status: 'completed',
+        score: finalScore,
+        submittedAt: new Date().toISOString(),
+        courseId: examData.courseId,
+        answers: formattedAnswers,
+        submitted: true
+      };
 
       // Check if assignment document exists
       let assignmentDoc;
@@ -346,43 +395,19 @@ const ExamAttemptScreen = ({ route, navigation }) => {
           appwriteConfig.databaseId,
           appwriteConfig.examAssignmentsCollectionId,
           assignmentId,
-          {
-            status: 'completed',
-            answers: JSON.stringify(answers),
-            submittedAt: new Date().toISOString(),
-            courseId: examData.courseId,
-            score: totalScore,
-            submitted: true
-          }
+          resultData
         );
       } else {
-        // Debug log for studentId
-        console.log('Submitting with studentId:', studentId, user);
-        if (!studentId) {
-          Alert.alert('Error', 'Your student ID is missing. Please log in again or contact support.');
-          setIsSubmitting(false);
-          return;
-        }
         // Create if not exists
         await databases.createDocument(
           appwriteConfig.databaseId,
           appwriteConfig.examAssignmentsCollectionId,
-          assignmentId, // Use assignmentId as the document ID
-          {
-            assignmentId, // Required field in data
-            examId, // Required field in data
-            studentId, // Required field in data
-            courseId: examData.courseId,
-            status: 'completed',
-            answers: JSON.stringify(answers),
-            submittedAt: new Date().toISOString(),
-            score: totalScore,
-            submitted: true
-          }
+          assignmentId,
+          resultData
         );
       }
 
-      navigation.replace('DrawerMain');
+      navigation.replace('StudentStack');
     } catch (error) {
       console.error('Error submitting exam:', error);
       Alert.alert('Error', 'Failed to submit exam. Please try again.');
@@ -558,9 +583,9 @@ const ExamAttemptScreen = ({ route, navigation }) => {
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 }}>
             <View>
-              <Text style={{ color: '#fff', fontSize: 14 }}>
+            <Text style={{ color: '#fff', fontSize: 14 }}>
                 MCQ: {mcqCount} | MSQ: {msqCount} | Total Marks: {totalMarks}
-              </Text>
+            </Text>
             </View>
             <View style={{ marginLeft: 8 }}>
               <TimerBar

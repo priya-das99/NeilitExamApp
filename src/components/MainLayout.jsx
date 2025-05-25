@@ -1,22 +1,28 @@
 import React from 'react';
-import { SafeAreaView, View, StyleSheet } from 'react-native';
-import BottomNavBar from './BottomNavBar';
+import { View, StyleSheet } from 'react-native';
+import LinearGradient from 'react-native-linear-gradient';
+import theme from '../styles/theme';
 
-export default function MainLayout({ children }) {
+const MainLayout = ({ children }) => {
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.content}>{children}</View>
-      <BottomNavBar />
-    </SafeAreaView>
+    <View style={styles.container}>
+      <LinearGradient
+        colors={[theme.colors.primary, theme.colors.secondary]}
+        style={styles.gradient}
+      >
+        {children}
+      </LinearGradient>
+    </View>
   );
-}
+};
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#fff',
-  },
-  content: {
+  container: {
     flex: 1,
   },
-}); 
+  gradient: {
+    flex: 1,
+  },
+});
+
+export default MainLayout; 

@@ -5,9 +5,12 @@ import { createDrawerNavigator } from '@react-navigation/drawer';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import StudentDashboard from './StudentDashboard';
+import CandidateHistory from './CandidateHistory';
+import CandidateProfile from './CandidateProfile';
 import { useAppwrite } from '../utils/AppwriteContext';
 import { useNavigation } from '@react-navigation/native';
-
+import { databases, appwriteConfig } from '../utils/appwriteConfig';
+import { Query } from 'appwrite';
 
 // Placeholder screens
 const Rank = () => (
@@ -22,76 +25,36 @@ const Result = () => (
   </View>
 );
 
-const CandidateProfile = () => (
-  <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-    <Text>Candidate Profile Screen</Text>
-  </View>
-);
-
-const Notifications = () => (
-  <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-    <Text>Notifications Screen</Text>
-  </View>
-);
-
-const CandidateHistory = () => (
-  <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-    <Text>Candidate History Screen</Text>
-  </View>
-);
-
-const Setting = () => (
-  <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-    <Text>Setting Screen</Text>
-  </View>
-);
-
-const Chat = () => (
-  <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-    <Text>Chat Screen</Text>
-  </View>
-);
-
-const FAQ = () => (
-  <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-    <Text>FAQ Screen</Text>
-  </View>
-);
-
-const AppReviews = () => (
-  <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-    <Text>App Reviews Screen</Text>
-  </View>
-);
-
-const Help = () => (
-  <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-    <Text>Help Screen</Text>
-  </View>
-);
-
-const CandidateLogout = () => (
-  <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-    <Text>Candidate Logout Screen</Text>
-  </View>
-);
-
-const FaceVerificationScreen = () => (
-  <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-    <Text>Face Verification Screen</Text>
-  </View>
-);
-
-const VoiceVerificationScreen = () => (
-  <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-    <Text>Face Verification Screen</Text>
-  </View>
-);
-
 const Drawer = createDrawerNavigator();
 
 const CustomDrawerContent = ({ navigation, themeColor, onThemeColorChange, setShouldLogout }) => {
-  const { handleLogout } = useAppwrite();
+  const { handleLogout, user } = useAppwrite();
+  const [student, setStudent] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchStudent = async () => {
+      if (!user || !user.email) return;
+      try {
+        const res = await databases.listDocuments(
+          appwriteConfig.databaseId,
+          appwriteConfig.studentsCollectionId,
+          [
+            // Query student by email
+            Query.equal('email', user.email)
+          ]
+        );
+        if (res.documents.length > 0) {
+          setStudent(res.documents[0]);
+        }
+      } catch (err) {
+        setStudent(null);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchStudent();
+  }, [user]);
 
   const doLogout = async () => {
     try {
@@ -120,27 +83,29 @@ const CustomDrawerContent = ({ navigation, themeColor, onThemeColorChange, setSh
 
   const drawerItems = [
     { name: 'Home', icon: 'home', route: 'DrawerMain' },
-    { name: 'Rank', icon: 'leaderboard', route: 'Rank' },
+    { name: 'History', icon: 'history', route: 'CandidateHistory' },
     { name: 'Result', icon: 'school', route: 'Result' },
     { name: 'Profile', icon: 'person', route: 'CandidateProfile' },
-    { name: 'History', icon: 'history', route: 'CandidateHistory' },
-    { name: 'Settings', icon: 'settings', route: 'Setting' },
-    { name: 'Chat', icon: 'chat', route: 'Chat' },
-    { name: 'FAQ', icon: 'help-outline', route: 'FAQ' },
-    { name: 'App Reviews', icon: 'star', route: 'AppReviews' },
-    { name: 'Notifications', icon: 'notifications', route: 'Notifications' },
-    { name: 'Help', icon: 'support', route: 'Help' },
   ];
+
   return (
     <View style={[styles.drawerContainer, { backgroundColor: themeColor, flex: 1 }]}> 
       <View style={styles.drawerHeader}>
         <Image
-          source={require('../../assets/images/user.png')}
+          source={
+            student && student.profileImage
+              ? { uri: student.profileImage }
+              : require('../../assets/images/user.png')
+          }
           style={styles.drawerAvatar}
           resizeMode="cover"
         />
-        <Text style={styles.drawerUserName}>Alex</Text>
-        <Text style={styles.drawerUserEmail}>alex@example.com</Text>
+        <Text style={styles.drawerUserName}>
+          {loading ? 'Loading...' : student?.name || 'Student'}
+        </Text>
+        <Text style={styles.drawerUserEmail}>
+          {loading ? '' : student?.email || ''}
+        </Text>
       </View>
       <View style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.drawerItemsContainer}>
@@ -148,12 +113,22 @@ const CustomDrawerContent = ({ navigation, themeColor, onThemeColorChange, setSh
             <TouchableOpacity
               key={item.name}
               style={styles.drawerItem}
-              onPress={item.route === 'logout' ? handleLogoutPress : () => navigation.navigate(item.route)}
+              onPress={() => navigation.navigate(item.route)}
             >
               <Icon name={item.icon} size={24} color="#ffffff" style={styles.drawerIcon} />
               <Text style={styles.drawerItemText}>{item.name}</Text>
             </TouchableOpacity>
           ))}
+          
+          <View style={styles.divider} />
+          
+          <TouchableOpacity
+            style={[styles.drawerItem, styles.logoutItem]}
+            onPress={handleLogoutPress}
+          >
+            <Icon name="logout" size={24} color="#ffffff" style={styles.drawerIcon} />
+            <Text style={styles.drawerItemText}>Logout</Text>
+          </TouchableOpacity>
         </ScrollView>
       </View>
     </View>
@@ -223,16 +198,7 @@ const DrawerMain = () => {
       <Drawer.Screen name="Rank" component={Rank} />
       <Drawer.Screen name="Result" component={Result} />
       <Drawer.Screen name="CandidateProfile" component={CandidateProfile} />
-      <Drawer.Screen name="Notifications" component={Notifications} />
       <Drawer.Screen name="CandidateHistory" component={CandidateHistory} />
-      <Drawer.Screen name="Setting" component={Setting} />
-      <Drawer.Screen name="Chat" component={Chat} />
-      <Drawer.Screen name="FAQ" component={FAQ} />
-      <Drawer.Screen name="AppReviews" component={AppReviews} />
-      <Drawer.Screen name="Help" component={Help} />
-      <Drawer.Screen name="CandidateLogout" component={CandidateLogout} />
-      <Drawer.Screen name="FaceVerificationScreen" component={FaceVerificationScreen} />
-      <Drawer.Screen name="VoiceVerificationScreen" component={VoiceVerificationScreen} />
     </Drawer.Navigator>
   );
 };
@@ -283,6 +249,15 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#ffffff',
     fontWeight: '500',
+  },
+  divider: {
+    height: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    marginVertical: 15,
+    marginHorizontal: 10,
+  },
+  logoutItem: {
+    marginTop: 10,
   },
 });
 

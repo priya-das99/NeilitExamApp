@@ -17,7 +17,7 @@ const ProtectedRoute = ({ children, requiredRole }) => {
         if (user?.preferences?.role === 'admin') {
           navigation.navigate('AdminDashboard');
         } else if (user?.preferences?.role === 'student') {
-          navigation.navigate('DrawerMain');
+          navigation.navigate('StudentStack');
         } else {
           // Fallback if no valid role
           navigation.navigate('CandidateLogin');

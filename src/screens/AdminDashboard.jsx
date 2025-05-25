@@ -95,7 +95,7 @@ const AdminDashboard = () => {
         const userRole = await AsyncStorage.getItem('user_role');
         
         if (userRole === 'student') {
-          navigation.replace('DrawerMain');
+          navigation.replace('StudentStack');
           return;
         }
 

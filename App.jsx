@@ -31,6 +31,7 @@ import AssignExam from './src/screens/AssignExam';
 import ManageQuestions from './src/screens/ManageQuestions';
 import EditExam from './src/screens/EditExam';
 import DrawerMain from './src/screens/DrawerMain';
+import ExamReviewScreen from './src/screens/ExamReviewScreen';
 
 const Stack = createStackNavigator();
 
@@ -215,6 +216,7 @@ const AppNavigator = () => {
       <Stack.Screen name="ManageStudents" component={ManageStudents} />
       <Stack.Screen name="ResultsAnalytics" component={ResultsAnalytics} />
       <Stack.Screen name="AdminProfile" component={AdminProfile} />
+      <Stack.Screen name="ExamReviewScreen" component={ExamReviewScreen} />
     </Stack.Navigator>
   );
 };
